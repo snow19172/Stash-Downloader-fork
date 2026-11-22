@@ -155,6 +155,7 @@ export class ScraperRegistry {
       // Try other scrapers for metadata enhancement
       for (const scraper of this.scrapers) {
         if (scraper === primaryScraper) continue;
+        if (primaryScraper instanceof TikTokPhotoScraper && scraper instanceof YtDlpScraper) continue;
         if (!scraper.canHandle(url)) continue;
         if (preferredContentType && !scraper.contentTypes.includes(preferredContentType)) continue;
 

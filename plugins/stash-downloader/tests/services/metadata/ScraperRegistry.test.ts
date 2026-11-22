@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { ScraperRegistry } from '@/services/metadata/ScraperRegistry';
+import { getStashService } from '@/services/stash/StashGraphQLService';
 import { ContentType } from '@/types';
 import type { IMetadataScraper, IScrapedMetadata } from '@/types';
 
@@ -38,6 +39,10 @@ function createMockScraper(
 }
 
 describe('ScraperRegistry', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe('findScraper', () => {
     it('should return a scraper for booru URLs', () => {
       const registry = new ScraperRegistry();
@@ -69,6 +74,19 @@ describe('ScraperRegistry', () => {
       );
 
       expect(scraper.name).toBe('TikTok Photos');
+    });
+
+    it('does not retry the same yt-dlp backend after a TikTok photo extraction failure', async () => {
+      const extraction = vi.spyOn(getStashService(), 'runPluginOperationWithError')
+        .mockResolvedValue({ data: null, error: 'TikTok photo extraction failed' });
+      const registry = new ScraperRegistry();
+
+      await registry.scrapeWithEnhancement(
+        'https://www.tiktok.com/@creator/photo/123456789',
+        ContentType.Gallery
+      );
+
+      expect(extraction).toHaveBeenCalledOnce();
     });
 
     it('should filter by content type preference for Image', () => {

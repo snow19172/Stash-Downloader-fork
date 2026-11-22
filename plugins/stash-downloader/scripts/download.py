@@ -19,6 +19,9 @@ Result Communication:
   a temp file that can be read via the 'read_result' task.
 """
 
+import base64
+import binascii
+import hashlib
 import json
 import logging
 import os
@@ -27,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
@@ -547,6 +551,50 @@ def is_tiktok_photo_url(url: Optional[str]) -> bool:
     return bool(url and TIKTOK_PHOTO_URL_RE.match(url))
 
 
+def _solve_tiktok_web_challenge(html: str) -> Optional[dict]:
+    class ChallengeElements(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.values = {}
+
+        def handle_starttag(self, tag, attrs):
+            attributes = dict(attrs)
+            element_id = attributes.get("id")
+            if element_id in {"cs", "wci", "rci", "rs"}:
+                self.values[element_id] = attributes.get("class", "")
+
+    parser = ChallengeElements()
+    parser.feed(html)
+    elements = parser.values
+    if not elements.get("cs") or not elements.get("wci"):
+        return None
+
+    try:
+        challenge = json.loads(base64.b64decode(elements["cs"] + "===").decode("utf-8"))
+        expected_digest = base64.b64decode(challenge["v"]["c"] + "===")
+        base_digest = hashlib.sha256(base64.b64decode(challenge["v"]["a"] + "==="))
+        solution = None
+        for value in range(1_000_001):
+            candidate = base_digest.copy()
+            candidate.update(str(value).encode("ascii"))
+            if candidate.digest() == expected_digest:
+                solution = value
+                break
+        if solution is None:
+            return None
+
+        challenge["d"] = base64.b64encode(str(solution).encode("ascii")).decode("ascii")
+        cookie_value = base64.b64encode(
+            json.dumps(challenge, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        cookies = {elements["wci"]: cookie_value}
+        if elements.get("rci") and elements.get("rs"):
+            cookies[elements["rci"]] = elements["rs"]
+        return cookies
+    except (binascii.Error, UnicodeDecodeError, KeyError, TypeError, ValueError):
+        return None
+
+
 def _find_tiktok_image_post(value: Any) -> Optional[Tuple[dict, list]]:
     stack = [value]
     while stack:
@@ -675,21 +723,56 @@ def extract_tiktok_photo_post(url: str, proxy: Optional[str] = None) -> dict:
 
     try:
         proxies = {"http": proxy, "https": proxy} if proxy else None
-        response = requests.get(
+        session = requests.Session()
+        headers = {
+            "User-Agent": BROWSER_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.tiktok.com/",
+        }
+        response = session.get(
             url,
-            headers={
-                "User-Agent": BROWSER_USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            },
+            headers=headers,
             proxies=proxies,
             timeout=30,
         )
         response.raise_for_status()
-        metadata = _parse_tiktok_photo_html(response.text, url)
+        html = response.text
+        status_code = response.status_code
+        content_type = response.headers.get("Content-Type", "unknown")
+        response.close()
+
+        metadata = _parse_tiktok_photo_html(html, url)
         if metadata:
             log.info(f"Extracted {len(metadata['gallery_images'])} TikTok photo(s)")
             return metadata
-        return {"extraction_error": "TikTok photo data was not present in the page response"}
+
+        challenge_cookies = _solve_tiktok_web_challenge(html)
+        challenge_detected = bool(re.search(r'\bid=["\'](?:cs|wci)["\']', html, re.IGNORECASE))
+        if challenge_cookies:
+            log.info("TikTok returned a web verification challenge; retrying with its challenge cookies")
+            for name, value in challenge_cookies.items():
+                session.cookies.set(name, value, domain=".tiktok.com", path="/")
+            response = session.get(url, headers=headers, proxies=proxies, timeout=30)
+            response.raise_for_status()
+            metadata = _parse_tiktok_photo_html(response.text, url)
+            status_code = response.status_code
+            content_type = response.headers.get("Content-Type", "unknown")
+            response.close()
+            if metadata:
+                log.info(f"Extracted {len(metadata['gallery_images'])} TikTok photo(s) after challenge retry")
+                return metadata
+
+        if challenge_detected and not challenge_cookies:
+            detail = "TikTok served a verification challenge that could not be solved"
+        else:
+            detail = "TikTok returned no carousel data"
+        return {
+            "extraction_error": (
+                f"{detail} (HTTP {status_code}, content type {content_type}). "
+                "Photo extraction reads TikTok page data directly and does not use the configured yt-dlp path."
+            )
+        }
     except requests.RequestException as e:
         log.error(f"TikTok photo extraction failed: {e}")
         return {"extraction_error": f"TikTok photo extraction failed: {e}"}
