@@ -6,6 +6,7 @@ import type {
   IDownloadItem,
   IStashScene,
   IStashImage,
+  IStashGallery,
   IStashPerformer,
   IStashTag,
   IStashStudio,
@@ -21,6 +22,13 @@ import { createLogger } from '@/utils';
 import { PLUGIN_ID } from '@/constants';
 
 const log = createLogger('StashImport');
+
+interface IImportCallbacks {
+  onProgress?: (progress: IDownloadProgress) => void;
+  onStatusChange?: (status: string) => void;
+  onLog?: (level: IItemLogEntry['level'], message: string, details?: string) => void;
+  onJobStart?: (jobId: string) => void;
+}
 
 export class StashImportService {
   private stashService = getStashService();
@@ -41,14 +49,8 @@ export class StashImportService {
    */
   async importToStash(
     item: IDownloadItem,
-    callbacks?: {
-      onProgress?: (progress: IDownloadProgress) => void;
-      onStatusChange?: (status: string) => void;
-      onLog?: (level: IItemLogEntry['level'], message: string, details?: string) => void;
-      /** Called when the Stash job starts, with the jobId for potential cancellation */
-      onJobStart?: (jobId: string) => void;
-    }
-  ): Promise<IStashScene | IStashImage> {
+    callbacks?: IImportCallbacks
+  ): Promise<IStashScene | IStashImage | IStashGallery> {
     const { onProgress, onStatusChange, onLog, onJobStart } = callbacks || {};
     if (!item.editedMetadata) {
       throw new Error('Item must have edited metadata before import');
@@ -64,6 +66,10 @@ export class StashImportService {
     }));
 
     if (onLog) onLog('info', `Starting import for: ${itemTitle}`);
+
+    if (contentType === ContentType.Gallery) {
+      return this.importGallery(item, callbacks);
+    }
 
     // Determine which URL to download from
     // For yt-dlp sites, use the original page URL; extracted media URLs may expire or reject generic requests.
@@ -418,6 +424,120 @@ export class StashImportService {
 
     if (onLog) onLog('success', 'Import completed successfully');
     return result;
+  }
+
+  private async importGallery(item: IDownloadItem, callbacks?: IImportCallbacks): Promise<IStashGallery> {
+    const { onProgress, onStatusChange, onLog, onJobStart } = callbacks || {};
+    const galleryImages = item.metadata?.galleryImages || [];
+    if (galleryImages.length === 0) {
+      throw new Error('This item is marked as a gallery but contains no image URLs');
+    }
+
+    const imageLibraryPath = await this.stashService.getImageLibraryPath();
+    if (!imageLibraryPath) {
+      throw new Error('No image-enabled Stash library was found. Add an image-enabled library before importing a gallery.');
+    }
+
+    const filePaths: string[] = [];
+    for (let index = 0; index < galleryImages.length; index++) {
+      const image = galleryImages[index]!;
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(image.url);
+      } catch {
+        throw new Error(`Gallery image ${index + 1} has an invalid URL`);
+      }
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        throw new Error(`Gallery image ${index + 1} must use HTTP or HTTPS`);
+      }
+
+      const filename = image.filename || `gallery-${Date.now()}-${index + 1}.jpg`;
+      onStatusChange?.(`Downloading image ${index + 1} of ${galleryImages.length}...`);
+      onLog?.('info', `Downloading gallery image ${index + 1} of ${galleryImages.length}`);
+
+      const download = await this.downloadService.downloadServerSide(image.url, {
+        outputDir: imageLibraryPath,
+        forceOutputDir: true,
+        filename,
+        forceDirect: true,
+        onProgress,
+        onJobStart,
+      });
+      if (!download.success || !download.file_path) {
+        throw new Error(`Failed to download gallery image ${index + 1}: ${download.error || 'No file path returned'}`);
+      }
+      filePaths.push(download.file_path);
+    }
+
+    onStatusChange?.('Scanning gallery images...');
+    onLog?.('info', `Scanning ${filePaths.length} downloaded image(s) into Stash`);
+    const scanJobId = await this.stashService.triggerScanForFile(filePaths[0]!);
+    if (!scanJobId) {
+      throw new Error('Failed to start a Stash scan for the downloaded gallery images');
+    }
+    const scanResult = await this.stashService.waitForJob(scanJobId, {
+      pollIntervalMs: 1000,
+      maxWaitMs: 120000,
+    });
+    if (!scanResult.success) {
+      throw new Error(`Stash scan failed: ${scanResult.error || 'Unknown error'}`);
+    }
+
+    const imageIds: string[] = [];
+    for (const filePath of filePaths) {
+      let image: { id: string } | null = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        image = await this.stashService.findImageByPath(filePath);
+        if (image) break;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      if (!image) {
+        throw new Error(`Stash did not index downloaded gallery image: ${filePath}`);
+      }
+      imageIds.push(image.id);
+    }
+
+    const metadata = item.metadata;
+    const edited = item.editedMetadata!;
+    const performerNames = edited.performerNames?.length ? edited.performerNames : metadata?.performers || [];
+    const tagNames = edited.tagNames?.length ? edited.tagNames : metadata?.tags || [];
+    const performerIds: string[] = [];
+    for (const name of new Set(performerNames.map(value => value.trim()).filter(Boolean))) {
+      const performer = await this.stashService.getOrCreatePerformer(name);
+      performerIds.push(performer.id);
+    }
+
+    const tagIds: string[] = [];
+    for (const name of new Set(tagNames.map(value => value.trim()).filter(Boolean))) {
+      const tag = await this.stashService.getOrCreateTag(name);
+      tagIds.push(tag.id);
+    }
+
+    const studioName = edited.studioName || edited.studio?.name || metadata?.studio;
+    const studio = studioName ? await this.stashService.getOrCreateStudio(studioName) : undefined;
+    onStatusChange?.('Creating gallery in Stash...');
+    const gallery = await this.stashService.createGallery({
+      title: edited.title || metadata?.title || item.url,
+      details: edited.description || metadata?.description,
+      url: item.url,
+      date: edited.date || metadata?.date,
+      rating100: edited.rating,
+      performer_ids: performerIds,
+      tag_ids: tagIds,
+      studio_id: studio?.id,
+    });
+
+    await this.stashService.addGalleryImages(gallery.id, imageIds);
+    try {
+      await this.stashService.setGalleryCover(gallery.id, imageIds[0]!);
+    } catch (error) {
+      log.warn(`Gallery created without an explicit cover image: ${String(error)}`);
+      onLog?.('warning', 'Gallery created, but the cover image could not be set');
+    }
+
+    onLog?.('success', `Gallery created with ${imageIds.length} image(s)`, `ID: ${gallery.id}`);
+    onStatusChange?.('Gallery imported');
+    return gallery;
   }
 
   /**

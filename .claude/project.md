@@ -43,7 +43,7 @@ JavaScript Extension / Web-UI Plugin for Stash
 3. **Content Type Support**
    - **Video**: Via YtDlpScraper (primary), supports most video sites
    - **Image**: Via BooruScraper for booru sites (Rule34, Gelbooru, Danbooru)
-   - **Gallery**: Multiple images from a single URL (booru pools, etc.)
+   - **Gallery**: TikTok photo posts and booru pools; TikTok uploader is imported as a performer, with creator name as fallback
    - Content type selector in URL input form
 
 4. **Stash Integration**

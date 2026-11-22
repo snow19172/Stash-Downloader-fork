@@ -60,6 +60,17 @@ describe('ScraperRegistry', () => {
       expect(scraper.name).toBeDefined();
     });
 
+    it('selects the TikTok photo scraper for gallery posts', () => {
+      const registry = new ScraperRegistry();
+
+      const scraper = registry.findScraper(
+        'https://www.tiktok.com/@creator/photo/123456789',
+        ContentType.Gallery
+      );
+
+      expect(scraper.name).toBe('TikTok Photos');
+    });
+
     it('should filter by content type preference for Image', () => {
       const registry = new ScraperRegistry();
 

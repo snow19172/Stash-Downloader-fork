@@ -128,6 +128,7 @@ query GetPluginSettings($include: [ID!]) {
 **MetadataService (ScraperRegistry)**
 - Pluggable scraper architecture with priority ordering
 - **ContentType support**: Scrapers declare supported content types (Video, Image, Gallery)
+- **TikTokPhotoScraper**: Specialized `/@user/photo/{id}` parser that extracts carousel images and uploader metadata without yt-dlp
 - **YtDlpScraper**: PRIMARY - Server-side yt-dlp via Python backend (extracts video URLs)
 - **BooruScraper**: Image/gallery scraper for booru sites (Rule34, Gelbooru, Danbooru)
 - **StashScraper**: FALLBACK - Uses Stash's built-in scraper API
@@ -403,6 +404,7 @@ interface IMetadataScraper {
 // Scrapers registered in priority order
 class ScraperRegistry {
   constructor() {
+    this.register(new TikTokPhotoScraper()); // TikTok photo galleries
     this.register(new YtDlpScraper());    // PRIMARY: Video via yt-dlp
     this.register(new BooruScraper());    // Image/Gallery for booru sites
     this.register(new StashScraper());    // FALLBACK: Stash's built-in scraper
@@ -419,18 +421,19 @@ class ScraperRegistry {
 
 ### Scraper Fallback Chain
 
-1. **YtDlpScraper** - PRIMARY for Video: Server-side yt-dlp via Python backend
+1. **TikTokPhotoScraper** - Specialized for TikTok photo posts: extracts carousel images from embedded page data and maps the uploader/creator to a performer.
+2. **YtDlpScraper** - PRIMARY for Video: Server-side yt-dlp via Python backend
    - Uses `runPluginTask` to extract metadata (saves to temp file)
    - Uses `runPluginOperation` to read result from temp file
    - **yt-dlp resolution**: Python module (`sys.executable -m yt_dlp`) → CLI on PATH → custom `ytdlpPath` setting → auto-install
    - Supports HTTP/SOCKS proxy via `httpProxy` setting (passed to yt-dlp via `--proxy` flag)
    - Extracts best quality video URL from formats array or top-level URL
-2. **BooruScraper** - PRIMARY for Image/Gallery: Booru site API scraper
+3. **BooruScraper** - PRIMARY for Image/Gallery: Booru site API scraper
    - Supports Rule34, Gelbooru, Danbooru, and other booru sites
    - Extracts tags, source URLs, and high-resolution images
    - Parses booru tag categories (artist, character, copyright, general)
-3. **StashScraper** - FALLBACK: Uses Stash's built-in scraper API
-4. **GenericScraper** - LAST RESORT: Extracts filename from URL
+4. **StashScraper** - FALLBACK: Uses Stash's built-in scraper API
+5. **GenericScraper** - LAST RESORT: URL parsing only
 
 If a scraper throws an error, the registry tries the next one.
 

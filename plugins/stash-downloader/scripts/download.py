@@ -415,6 +415,9 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
     Returns:
         dict with metadata on success, or dict with 'extraction_error' key on failure
     """
+    if is_tiktok_photo_url(url):
+        return extract_tiktok_photo_post(url, proxy=proxy)
+
     # rule34video: yt-dlp's extractor is broken (see extract_rule34video), so use the
     # built-in page parser first and only fall back to yt-dlp if it returns nothing
     if is_rule34video_url(url):
@@ -535,8 +538,161 @@ def is_direct_file_url(url: str) -> bool:
 BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 RULE34VIDEO_URL_RE = re.compile(r"^https?://(?:www\.)?rule34video\.(?:com|party)/videos?/(\d+)", re.IGNORECASE)
+TIKTOK_PHOTO_URL_RE = re.compile(r"^https?://(?:www\.)?tiktok\.com/@[\w.-]+/photo/(\d+)(?:[/?#]|$)", re.IGNORECASE)
 
 QUALITY_MAX_HEIGHT = {"1080p": 1080, "720p": 720, "480p": 480}
+
+
+def is_tiktok_photo_url(url: Optional[str]) -> bool:
+    return bool(url and TIKTOK_PHOTO_URL_RE.match(url))
+
+
+def _find_tiktok_image_post(value: Any) -> Optional[Tuple[dict, list]]:
+    stack = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key in ("imagePost", "image_post_info", "imagePostInfo", "image_post"):
+                image_post = current.get(key)
+                if isinstance(image_post, dict):
+                    images = image_post.get("images") or image_post.get("image_list") or image_post.get("imageList")
+                    if isinstance(images, list) and images:
+                        return current, images
+            stack.extend(reversed(list(current.values())))
+        elif isinstance(current, list):
+            stack.extend(reversed(current))
+    return None
+
+
+def _tiktok_image_url(image: Any) -> Optional[str]:
+    if not isinstance(image, dict):
+        return None
+
+    for key in (
+        "imageURL", "image_url", "originImage", "origin_image",
+        "displayImage", "display_image", "ownerWatermarkImage", "owner_watermark_image",
+    ):
+        value = image.get(key)
+        if isinstance(value, dict):
+            value = value.get("urlList") or value.get("url_list") or value.get("url")
+        elif isinstance(value, list):
+            value = value[0] if value else None
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if isinstance(value, str) and value:
+            return f"https:{value}" if value.startswith("//") else value
+
+    for key in ("urlList", "url_list"):
+        value = image.get(key)
+        if isinstance(value, list) and value and isinstance(value[0], str):
+            url = value[0]
+            return f"https:{url}" if url.startswith("//") else url
+
+    return None
+
+
+def _parse_tiktok_photo_html(html: str, page_url: str) -> Optional[dict]:
+    url_match = TIKTOK_PHOTO_URL_RE.match(page_url)
+    if not url_match:
+        return None
+
+    script_ids = ("__UNIVERSAL_DATA_FOR_REHYDRATION__", "SIGI_STATE")
+    for script_id in script_ids:
+        pattern = re.compile(
+            rf'<script\b[^>]*\bid=["\']{re.escape(script_id)}["\'][^>]*>(.*?)</script\s*>',
+            re.IGNORECASE | re.DOTALL,
+        )
+        for match in pattern.finditer(html):
+            try:
+                page_data = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+
+            found = _find_tiktok_image_post(page_data)
+            if not found:
+                continue
+
+            item, image_entries = found
+            images = []
+            seen_urls = set()
+            post_id = str(item.get("id") or url_match.group(1))
+            for index, image_entry in enumerate(image_entries, start=1):
+                image_url = _tiktok_image_url(image_entry)
+                if not image_url or not image_url.startswith(("http://", "https://")) or image_url in seen_urls:
+                    continue
+                seen_urls.add(image_url)
+
+                image_path = image_url.split("?", 1)[0].split("#", 1)[0]
+                extension = os.path.splitext(image_path)[1].lower()
+                if extension not in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}:
+                    extension = ".jpg"
+
+                image_info = image_entry if isinstance(image_entry, dict) else {}
+                images.append({
+                    "url": image_url,
+                    "thumbnail_url": image_url,
+                    "filename": f"tiktok-{post_id}-{index:02d}{extension}",
+                    "width": image_info.get("imageWidth") or image_info.get("image_width") or image_info.get("width"),
+                    "height": image_info.get("imageHeight") or image_info.get("image_height") or image_info.get("height"),
+                })
+
+            if not images:
+                continue
+
+            author = item.get("author") or item.get("authorInfo") or {}
+            if not isinstance(author, dict):
+                author = {}
+            uploader = author.get("uniqueId") or author.get("unique_id") or author.get("username")
+            creator = author.get("nickname") or author.get("displayName") or author.get("name")
+            create_time = item.get("createTime") or item.get("create_time")
+            upload_date = None
+            if create_time:
+                try:
+                    upload_date = time.strftime("%Y%m%d", time.gmtime(int(create_time)))
+                except (TypeError, ValueError, OverflowError):
+                    pass
+
+            title = item.get("desc") or item.get("description") or item.get("title") or f"TikTok photo {post_id}"
+            return {
+                "id": post_id,
+                "title": title,
+                "description": item.get("desc") or item.get("description") or title,
+                "uploader": uploader,
+                "creator": creator,
+                "upload_date": upload_date,
+                "thumbnail": images[0]["url"],
+                "gallery_images": images,
+                "content_type": "gallery",
+                "webpage_url": page_url,
+                "extractor": "TikTok",
+            }
+
+    return None
+
+
+def extract_tiktok_photo_post(url: str, proxy: Optional[str] = None) -> dict:
+    import requests
+
+    try:
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": BROWSER_USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            proxies=proxies,
+            timeout=30,
+        )
+        response.raise_for_status()
+        metadata = _parse_tiktok_photo_html(response.text, url)
+        if metadata:
+            log.info(f"Extracted {len(metadata['gallery_images'])} TikTok photo(s)")
+            return metadata
+        return {"extraction_error": "TikTok photo data was not present in the page response"}
+    except requests.RequestException as e:
+        log.error(f"TikTok photo extraction failed: {e}")
+        return {"extraction_error": f"TikTok photo extraction failed: {e}"}
 
 
 def is_rule34video_url(url: Optional[str]) -> bool:
@@ -1234,6 +1390,7 @@ def task_download(args: dict) -> dict:
     quality = args.get("quality", "best")
     proxy = args.get("proxy")  # Optional proxy for bypassing restrictions
     ytdlp_path = args.get("ytdlp_path")  # Optional custom path to yt-dlp binary
+    force_direct = bool(args.get("force_direct"))
     result_id = args.get("result_id")
     progress_id = args.get("progress_id")  # For real-time progress updates
 
@@ -1258,7 +1415,7 @@ def task_download(args: dict) -> dict:
     ytdlp_url = url
 
     # Check if this is a direct file URL (try direct download first, fallback to yt-dlp)
-    if is_direct_file_url(url):
+    if force_direct or is_direct_file_url(url):
         log.info(f"Detected direct file URL, trying direct download first")
         file_path = download_direct_file(url, output_dir, filename, proxy=proxy, progress_id=progress_id)
 
@@ -1270,6 +1427,11 @@ def task_download(args: dict) -> dict:
                 log.debug(f"Direct download result saved with result_id: {result_id}")
             return result
         else:
+            if force_direct:
+                result = {"result_error": "Direct image download failed", "success": False}
+                if result_id:
+                    save_result(result_id, result)
+                return result
             # Direct download failed (likely 403/hotlink protection)
             # Fall back to yt-dlp with the original page URL (if provided)
             if fallback_url:
@@ -1365,7 +1527,7 @@ def task_extract_metadata(args: dict) -> dict:
             save_result(result_id, result)
         return result
 
-    if not check_ytdlp(ytdlp_path):
+    if not is_tiktok_photo_url(url) and not check_ytdlp(ytdlp_path):
         result = {"result_error": 'yt-dlp is not installed. Install with: pip install "yt-dlp[default,curl-cffi]" (or set ytdlpPath in plugin settings)', "success": False}
         if result_id:
             save_result(result_id, result)
@@ -1428,9 +1590,12 @@ def task_extract_metadata(args: dict) -> dict:
             "description": metadata.get("description"),
             "duration": metadata.get("duration"),
             "uploader": metadata.get("uploader"),
+            "creator": metadata.get("creator"),
             "channel": metadata.get("channel"),  # Channel name (fallback for studio)
             "upload_date": metadata.get("upload_date"),
             "thumbnail": metadata.get("thumbnail"),
+            "content_type": metadata.get("content_type", "video"),
+            "gallery_images": metadata.get("gallery_images", []),
             # Tags and categories (site-specific, may be empty)
             "tags": metadata.get("tags", []),  # List of tags
             "categories": metadata.get("categories", []),  # List of categories
@@ -1452,7 +1617,7 @@ def task_extract_metadata(args: dict) -> dict:
         log.debug(f"Extracted {len(formats_list)} video formats from yt-dlp output")
         if result.get("url"):
             log.debug(f"Top-level URL available: {result['url'][:100]}...")
-        else:
+        elif result.get("content_type") != "gallery":
             log.warning("No top-level URL found in yt-dlp output")
 
     # Save result for async retrieval if result_id provided

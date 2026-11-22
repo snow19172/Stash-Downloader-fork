@@ -331,6 +331,36 @@ export class StashGraphQLService {
     return result.data.galleryCreate;
   }
 
+  async addGalleryImages(galleryId: string, imageIds: string[]): Promise<void> {
+    const mutation = `
+      mutation AddGalleryImages($input: GalleryAddInput!) {
+        addGalleryImages(input: $input)
+      }
+    `;
+
+    const result = await this.gqlRequest<{ addGalleryImages: boolean }>(mutation, {
+      input: { gallery_id: galleryId, image_ids: imageIds },
+    });
+    if (!result.data?.addGalleryImages) {
+      throw new Error('Failed to add images to gallery');
+    }
+  }
+
+  async setGalleryCover(galleryId: string, imageId: string): Promise<void> {
+    const mutation = `
+      mutation SetGalleryCover($input: GallerySetCoverInput!) {
+        setGalleryCover(input: $input)
+      }
+    `;
+
+    const result = await this.gqlRequest<{ setGalleryCover: boolean }>(mutation, {
+      input: { gallery_id: galleryId, cover_image_id: imageId },
+    });
+    if (!result.data?.setGalleryCover) {
+      throw new Error('Failed to set gallery cover image');
+    }
+  }
+
   /**
    * Create a new performer
    */
@@ -1339,6 +1369,28 @@ export class StashGraphQLService {
       log.error(`findSceneByPath failed: ${String(error)}`);
       return null;
     }
+  }
+
+  async findImageByPath(filePath: string): Promise<{ id: string } | null> {
+    const query = `
+      query FindImageByPath($path: String!) {
+        findImages(
+          image_filter: { path: { value: $path, modifier: EQUALS } }
+          filter: { per_page: 1 }
+        ) {
+          images {
+            id
+          }
+        }
+      }
+    `;
+
+    const result = await this.gqlRequest<{ findImages: { images: Array<{ id: string }> } }>(
+      query,
+      { path: filePath }
+    );
+    const images = result.data?.findImages?.images || [];
+    return images[0] || null;
   }
 
   /**

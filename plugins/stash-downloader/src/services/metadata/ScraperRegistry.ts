@@ -2,6 +2,7 @@
  * ScraperRegistry - Manages metadata scrapers
  *
  * Priority order:
+ * - TikTokPhotoScraper (specialized) - TikTok photo posts as galleries
  * - YtDlpScraper (primary) - Server-side yt-dlp via Python backend
  * - BooruScraper - Image/gallery scraper for booru sites
  * - StashScraper (fallback) - Uses Stash's built-in scraper API
@@ -11,7 +12,7 @@
 import type { IMetadataScraper, IScrapedMetadata } from '@/types';
 import { ContentType } from '@/types';
 import { GenericScraper } from './GenericScraper';
-import { YtDlpScraper } from './YtDlpScraper';
+import { TikTokPhotoScraper, YtDlpScraper } from './YtDlpScraper';
 import { StashScraper } from './StashScraper';
 import { BooruScraper } from './BooruScraper';
 import { withTimeout, createLogger } from '@/utils';
@@ -33,11 +34,12 @@ export class ScraperRegistry {
 
     // Register scrapers in priority order
     // All scrapers use server-side extraction (no CORS issues)
+    this.register(new TikTokPhotoScraper()); // Primary for TikTok photo posts
     this.register(new YtDlpScraper());   // Primary for video
     this.register(new BooruScraper());   // Primary for images/galleries
     this.register(new StashScraper());   // Fallback (uses Stash's scraper API)
 
-    log.info('Scrapers registered: YtDlpScraper, BooruScraper, StashScraper, GenericScraper (fallback)');
+    log.info('Scrapers registered: TikTokPhotoScraper, YtDlpScraper, BooruScraper, StashScraper, GenericScraper (fallback)');
 
     // Check yt-dlp version asynchronously (fire and forget)
     this.checkYtDlpVersion();

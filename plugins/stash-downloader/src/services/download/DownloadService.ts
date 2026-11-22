@@ -28,8 +28,10 @@ export interface IDownloadOptions {
   onJobStart?: (jobId: string) => void;
   signal?: AbortSignal;
   outputDir?: string;
+  forceOutputDir?: boolean;
   filename?: string;
   quality?: 'best' | '1080p' | '720p' | '480p';
+  forceDirect?: boolean;
   /** Fallback URL for yt-dlp if direct download fails (e.g., original page URL) */
   fallbackUrl?: string;
 }
@@ -93,12 +95,16 @@ export class DownloadService {
       // Get server download path and proxy from settings
       // Priority: plugin setting > Stash library > default
       const settings = getStorageItem<IPluginSettings>(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
-      const serverDownloadPath = settings.serverDownloadPath || options.outputDir || DEFAULT_SETTINGS.serverDownloadPath;
+      const serverDownloadPath = options.forceOutputDir && options.outputDir
+        ? options.outputDir
+        : settings.serverDownloadPath || options.outputDir || DEFAULT_SETTINGS.serverDownloadPath;
       const httpProxy = settings.httpProxy;
       const ytdlpPath = settings.ytdlpPath;
 
       // Log which path was determined and why (debug only - visible in UI)
-      if (settings.serverDownloadPath) {
+      if (options.forceOutputDir && options.outputDir) {
+        log.debug('Download path (explicitly required for Stash import):', serverDownloadPath);
+      } else if (settings.serverDownloadPath) {
         log.debug('Download path (from plugin settings):', serverDownloadPath);
       } else if (options.outputDir) {
         log.debug('Download path (from Stash library):', serverDownloadPath);
@@ -192,6 +198,7 @@ export class DownloadService {
             output_dir: serverDownloadPath,
             filename: options.filename,
             quality: options.quality || 'best',
+            force_direct: options.forceDirect,
             result_id: resultId,
             progress_id: progressId, // For real-time progress updates
             proxy: httpProxy,
