@@ -103,6 +103,7 @@ export class DownloadService {
       const httpProxy = settings.httpProxy;
       const ytdlpPath = settings.ytdlpPath;
       const galleryDlPath = settings.galleryDlPath;
+      const galleryDlDownloadPath = settings.galleryDlDownloadPath;
 
       // Log which path was determined and why (debug only - visible in UI)
       if (options.forceOutputDir && options.outputDir) {
@@ -134,6 +135,7 @@ export class DownloadService {
         has_proxy: !!httpProxy,
         has_ytdlp_path: !!ytdlpPath,
         has_gallery_dl_path: !!galleryDlPath,
+        gallery_dl_download_path: galleryDlDownloadPath || `${serverDownloadPath || '<download destination>'}/gallery-dl`,
       }));
 
       // Start progress polling in background. Always runs (even without onProgress)
@@ -212,6 +214,7 @@ export class DownloadService {
             proxy: httpProxy,
             ytdlp_path: ytdlpPath, // Custom yt-dlp binary path
             gallery_dl_path: galleryDlPath,
+            gallery_dl_download_path: galleryDlDownloadPath,
           },
           {
             // Stall-based: stop only if no progress for 5 minutes while running.

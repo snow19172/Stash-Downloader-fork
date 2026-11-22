@@ -139,7 +139,8 @@ query GetPluginSettings($include: [ID!]) {
 
 **Python Backend (scripts/download.py)**
 - Server-side downloads using yt-dlp
-- Optional gallery-dl fallback for TikTok metadata and downloads; detects the Python module or PATH CLI, with an optional `galleryDlPath` setting
+- Optional gallery-dl fallback for TikTok metadata and downloads; detects the Python module or PATH CLI, with optional `galleryDlPath` and `galleryDlDownloadPath` settings
+- Fallback downloads preserve gallery-dl's category/user folder structure inside a dedicated `gallery-dl` subdirectory by default, so Stash scans the downloaded folder instead of the full library root
 - Quality selection (best, 1080p, 720p, 480p)
 - Metadata extraction without downloading
 - **Cover image fetching**: Fetches thumbnail URLs server-side (bypasses browser CSP)

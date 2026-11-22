@@ -95,9 +95,11 @@ class GalleryDlFallbackTests(unittest.TestCase):
     def test_download_fallback_selects_requested_photo_index(self, popen, _get_command):
         with tempfile.TemporaryDirectory() as output_dir:
             def create_fake_download(command, **_kwargs):
-                download_dir = Path(command[command.index("-D") + 1])
-                (download_dir / "123_1.jpg").write_bytes(b"first")
-                (download_dir / "123_2.webp").write_bytes(b"second")
+                download_dir = Path(command[command.index("-d") + 1])
+                gallery_folder = download_dir / "TikTok" / "creator_handle"
+                gallery_folder.mkdir(parents=True)
+                (gallery_folder / "123_1.jpg").write_bytes(b"first")
+                (gallery_folder / "123_2.webp").write_bytes(b"second")
 
                 class CompletedProcess:
                     returncode = 0
@@ -119,6 +121,7 @@ class GalleryDlFallbackTests(unittest.TestCase):
             self.assertIsNone(error)
             self.assertEqual(Path(downloaded_path).read_bytes(), b"second")
             self.assertEqual(Path(downloaded_path).name, "tiktok-123-02.webp")
+            self.assertEqual(Path(downloaded_path).parent.name, "creator_handle")
 
     @patch.object(backend, "download_with_gallery_dl")
     @patch.object(backend, "download_video", return_value=(None, "yt-dlp failed"))
@@ -130,15 +133,18 @@ class GalleryDlFallbackTests(unittest.TestCase):
             file_path = Path(output_dir) / "video.mp4"
             file_path.write_bytes(b"video")
             download_gallery_dl.return_value = (str(file_path), None)
+            gallery_download_path = str(Path(output_dir) / "custom-gallery-dl")
 
             result = backend.task_download({
                 "url": "https://www.tiktok.com/@creator/video/123",
                 "output_dir": output_dir,
+                "gallery_dl_download_path": gallery_download_path,
             })
 
             self.assertTrue(result["success"])
             self.assertEqual(result["file_path"], str(file_path))
             download_gallery_dl.assert_called_once()
+            self.assertEqual(download_gallery_dl.call_args.args[1], gallery_download_path)
 
     @patch.object(backend, "download_with_gallery_dl")
     @patch.object(backend, "download_direct_file", return_value=None)
@@ -157,6 +163,7 @@ class GalleryDlFallbackTests(unittest.TestCase):
 
             self.assertTrue(result["success"])
             self.assertEqual(download_gallery_dl.call_args.args[0], "https://www.tiktok.com/@creator/photo/123")
+            self.assertEqual(download_gallery_dl.call_args.args[1], str(Path(output_dir) / "gallery-dl"))
             self.assertEqual(download_gallery_dl.call_args.kwargs["gallery_index"], 2)
 
 

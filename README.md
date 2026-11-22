@@ -82,6 +82,7 @@ Configure in Stash at **Settings** → **Plugins** → **Stash Downloader**:
 | **Server Download Path** | Where to save files (default: `/data/StashDownloader`) |
 | **HTTP Proxy** | Proxy for geo-restricted content (`http://`, `socks5://`) |
 | **yt-dlp Path / gallery-dl Path** | Optional custom executable paths; gallery-dl is used as a TikTok fallback |
+| **gallery-dl Download Path** | Optional dedicated folder for fallback downloads; leave empty to use a `gallery-dl` subfolder. Keep it inside the relevant Stash library for imports |
 | **Concurrent Downloads** | Max simultaneous downloads (default: 3) |
 | **Download Quality** | Preferred video quality |
 

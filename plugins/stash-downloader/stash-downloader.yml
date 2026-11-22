@@ -15,6 +15,10 @@ settings:
     displayName: gallery-dl Path
     description: "Custom path to gallery-dl binary for TikTok metadata and download fallback. Leave empty for auto-detection (Python module first, then PATH)."
     type: STRING
+  galleryDlDownloadPath:
+    displayName: gallery-dl Download Path
+    description: "Absolute directory for gallery-dl fallback downloads. Leave empty to use a gallery-dl subfolder under the normal download destination. For Stash imports, set this inside the relevant Stash library."
+    type: STRING
   httpProxy:
     displayName: HTTP Proxy
     description: HTTP/HTTPS proxy for server-side downloads (e.g., http://proxy.example.com:8080 or socks5://proxy.example.com:1080)

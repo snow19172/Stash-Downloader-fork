@@ -194,7 +194,7 @@ python -m pip install gallery-dl
 docker exec -it stash pip install --break-system-packages gallery-dl
 ```
 
-The backend auto-detects the gallery-dl Python module or CLI on PATH. If Stash runs it in a different environment, set **gallery-dl Path** in the plugin settings. TikTok photo-post gallery imports also retry an image through gallery-dl using that post's original URL and image index.
+The backend auto-detects the gallery-dl Python module or CLI on PATH. If Stash runs it in a different environment, set **gallery-dl Path** in the plugin settings. Fallback downloads go to a dedicated `gallery-dl` subdirectory under the normal download destination by default, preserving gallery-dl's category/user folder structure and limiting Stash scans to the downloaded folder. Set **gallery-dl Download Path** to override it; for imports, keep this directory inside the appropriate Stash library. TikTok photo-post gallery imports retry an image through gallery-dl using that post's original URL and image index.
 
 ### Common Site-Specific Issues
 - **XHamster**: Extractor updates frequently needed (check [yt-dlp issues](https://github.com/yt-dlp/yt-dlp/issues))

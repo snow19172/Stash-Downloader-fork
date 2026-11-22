@@ -1733,7 +1733,7 @@ def download_with_gallery_dl(
             cmd.extend([
                 "--no-input",
                 "--no-mtime",
-                "-D", temp_dir,
+                "-d", temp_dir,
                 "-f", "{id}_{num}.{extension}",
             ])
             if proxy:
@@ -1816,7 +1816,10 @@ def download_with_gallery_dl(
                     final_name += selected_file.suffix
             else:
                 final_name = selected_file.name
-            final_path = os.path.join(output_dir, final_name)
+            relative_directory = selected_file.relative_to(temp_dir).parent
+            final_directory = os.path.join(output_dir, str(relative_directory))
+            os.makedirs(final_directory, exist_ok=True)
+            final_path = os.path.join(final_directory, final_name)
             shutil.move(str(selected_file), final_path)
 
             if progress_id:
@@ -1853,6 +1856,7 @@ def task_download(args: dict) -> dict:
         quality: Quality preference (best, 1080p, 720p, 480p)
         proxy: Optional HTTP/HTTPS/SOCKS proxy (e.g., http://proxy.example.com:8080)
         gallery_dl_path: Optional custom path to gallery-dl binary
+        gallery_dl_download_path: Optional directory for gallery-dl fallback files
         result_id: Optional ID for storing result (for async retrieval)
         progress_id: Optional ID for progress updates (frontend can poll this)
         gallery_index: Optional 1-based image index for TikTok photo-post fallback
@@ -1871,6 +1875,7 @@ def task_download(args: dict) -> dict:
     proxy = args.get("proxy")  # Optional proxy for bypassing restrictions
     ytdlp_path = args.get("ytdlp_path")  # Optional custom path to yt-dlp binary
     gallery_dl_path = args.get("gallery_dl_path")
+    gallery_dl_download_path = args.get("gallery_dl_download_path")
     gallery_index = args.get("gallery_index")
     force_direct = bool(args.get("force_direct"))
     result_id = args.get("result_id")
@@ -1893,6 +1898,8 @@ def task_download(args: dict) -> dict:
             save_result(result_id, result)
         return result
 
+    gallery_output_dir = gallery_dl_download_path or os.path.join(output_dir, "gallery-dl")
+
     # Track which URL to use for yt-dlp fallback
     ytdlp_url = url
 
@@ -1913,7 +1920,7 @@ def task_download(args: dict) -> dict:
                 if is_tiktok_photo_url(fallback_url):
                     gallery_file, gallery_error = download_with_gallery_dl(
                         fallback_url,
-                        output_dir,
+                        gallery_output_dir,
                         filename=filename,
                         proxy=proxy,
                         progress_id=progress_id,
@@ -2003,7 +2010,7 @@ def task_download(args: dict) -> dict:
     if is_tiktok_download:
         gallery_file, gallery_error = download_with_gallery_dl(
             ytdlp_url,
-            output_dir,
+            gallery_output_dir,
             filename=filename,
             proxy=proxy,
             progress_id=progress_id,

@@ -177,6 +177,8 @@ export interface IPluginSettings {
   ytdlpPath?: string;
   /** Custom path to gallery-dl binary, used as a TikTok fallback. */
   galleryDlPath?: string;
+  /** Dedicated gallery-dl output directory; defaults to <download destination>/gallery-dl. */
+  galleryDlDownloadPath?: string;
   httpProxy?: string;
   autoCreatePerformers: boolean;
   autoCreateTags: boolean;

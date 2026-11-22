@@ -72,6 +72,7 @@ export const QueuePage: React.FC = () => {
   // Get proxy info for display
   const httpProxy = settings.httpProxy;
   const serverDownloadPath = settings.serverDownloadPath || DEFAULT_SETTINGS.serverDownloadPath;
+  const galleryDlDownloadPath = settings.galleryDlDownloadPath;
   
   // Fetch and sync settings from Stash on mount (once, no polling)
   useEffect(() => {
@@ -819,6 +820,12 @@ export const QueuePage: React.FC = () => {
                     <div className="d-flex justify-content-between align-items-center">
                       <span style={{ color: '#8b9fad' }}>Server Download Path:</span>
                       <code className="text-light">{serverDownloadPath}</code>
+                    </div>
+                    <div className="d-flex justify-content-between align-items-center">
+                      <span style={{ color: '#8b9fad' }}>gallery-dl Download Path:</span>
+                      <code className="text-light">
+                        {galleryDlDownloadPath || 'Automatic: <download destination>/gallery-dl'}
+                      </code>
                     </div>
                     <div className="d-flex justify-content-between align-items-center">
                       <span style={{ color: '#8b9fad' }}>HTTP/SOCKS Proxy:</span>
