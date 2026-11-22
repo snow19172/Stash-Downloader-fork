@@ -34,6 +34,8 @@ export interface IDownloadOptions {
   forceDirect?: boolean;
   /** Fallback URL for yt-dlp if direct download fails (e.g., original page URL) */
   fallbackUrl?: string;
+  /** 1-based image index for a TikTok photo-post gallery fallback */
+  galleryIndex?: number;
 }
 
 export interface IServerDownloadResult {
@@ -100,6 +102,7 @@ export class DownloadService {
         : settings.serverDownloadPath || options.outputDir || DEFAULT_SETTINGS.serverDownloadPath;
       const httpProxy = settings.httpProxy;
       const ytdlpPath = settings.ytdlpPath;
+      const galleryDlPath = settings.galleryDlPath;
 
       // Log which path was determined and why (debug only - visible in UI)
       if (options.forceOutputDir && options.outputDir) {
@@ -118,6 +121,9 @@ export class DownloadService {
       if (ytdlpPath) {
         log.debug(`Using custom yt-dlp path: ${ytdlpPath}`);
       }
+      if (galleryDlPath) {
+        log.debug(`Using custom gallery-dl path: ${galleryDlPath}`);
+      }
 
       // Run the download task and wait for completion
       log.info('Starting download task with parameters:', JSON.stringify({
@@ -127,6 +133,7 @@ export class DownloadService {
         quality: options.quality || 'best',
         has_proxy: !!httpProxy,
         has_ytdlp_path: !!ytdlpPath,
+        has_gallery_dl_path: !!galleryDlPath,
       }));
 
       // Start progress polling in background. Always runs (even without onProgress)
@@ -199,10 +206,12 @@ export class DownloadService {
             filename: options.filename,
             quality: options.quality || 'best',
             force_direct: options.forceDirect,
+            gallery_index: options.galleryIndex,
             result_id: resultId,
             progress_id: progressId, // For real-time progress updates
             proxy: httpProxy,
             ytdlp_path: ytdlpPath, // Custom yt-dlp binary path
+            gallery_dl_path: galleryDlPath,
           },
           {
             // Stall-based: stop only if no progress for 5 minutes while running.

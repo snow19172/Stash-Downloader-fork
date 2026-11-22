@@ -53,13 +53,17 @@ export class YtDlpScraper implements IMetadataScraper {
   /**
    * Read proxy and custom yt-dlp path from saved settings
    */
-  private getSettings(): { proxy?: string; ytdlpPath?: string } {
+  private getSettings(): { proxy?: string; ytdlpPath?: string; galleryDlPath?: string } {
     if (typeof window === 'undefined') return {};
     const settings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
     if (!settings) return {};
     try {
       const parsed = JSON.parse(settings);
-      return { proxy: parsed.httpProxy, ytdlpPath: parsed.ytdlpPath };
+      return {
+        proxy: parsed.httpProxy,
+        ytdlpPath: parsed.ytdlpPath,
+        galleryDlPath: parsed.galleryDlPath,
+      };
     } catch {
       // Ignore parse errors
       return {};
@@ -71,7 +75,7 @@ export class YtDlpScraper implements IMetadataScraper {
    */
   private async scrapeServerSide(url: string): Promise<IScrapedMetadata> {
     const stashService = getStashService();
-    const { proxy, ytdlpPath } = this.getSettings();
+    const { proxy, ytdlpPath, galleryDlPath } = this.getSettings();
 
     // Log configuration for troubleshooting
     if (proxy) {
@@ -82,6 +86,9 @@ export class YtDlpScraper implements IMetadataScraper {
     if (ytdlpPath) {
       log.debug(`Using custom yt-dlp path: ${ytdlpPath}`);
     }
+    if (galleryDlPath) {
+      log.debug(`Using custom gallery-dl path: ${galleryDlPath}`);
+    }
 
     // No result_id: Python returns the result directly and writes no temp file.
     // No request timeout: Python bounds extraction itself (yt-dlp/page fetch timeouts).
@@ -91,6 +98,7 @@ export class YtDlpScraper implements IMetadataScraper {
         url: url,
         proxy: proxy, // Pass proxy if configured
         ytdlp_path: ytdlpPath, // Pass custom yt-dlp path if configured
+        gallery_dl_path: galleryDlPath,
       })
     );
 
@@ -101,7 +109,7 @@ export class YtDlpScraper implements IMetadataScraper {
       throw new Error(op.error);
     } else if (op.transportError) {
       log.warn('Extraction request failed, falling back to plugin task');
-      readResult = await this.extractViaTask(url, proxy, ytdlpPath);
+      readResult = await this.extractViaTask(url, proxy, ytdlpPath, galleryDlPath);
     } else {
       if (!op.data) {
         throw new Error('runPluginOperation returned null - check Stash server logs');
@@ -118,7 +126,12 @@ export class YtDlpScraper implements IMetadataScraper {
    * 1. runPluginTask extracts metadata and saves to temp file
    * 2. runPluginOperation reads the result from temp file
    */
-  private async extractViaTask(url: string, proxy?: string, ytdlpPath?: string): Promise<any> {
+  private async extractViaTask(
+    url: string,
+    proxy?: string,
+    ytdlpPath?: string,
+    galleryDlPath?: string
+  ): Promise<any> {
     const stashService = getStashService();
     const resultId = this.generateResultId();
 
@@ -152,6 +165,7 @@ export class YtDlpScraper implements IMetadataScraper {
           result_id: resultId,
           proxy: proxy, // Pass proxy if configured
           ytdlp_path: ytdlpPath, // Pass custom yt-dlp path if configured
+          gallery_dl_path: galleryDlPath,
         },
         {
           maxWaitMs: this.timeoutMs,

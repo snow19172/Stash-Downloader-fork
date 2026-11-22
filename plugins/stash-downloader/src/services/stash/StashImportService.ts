@@ -460,6 +460,8 @@ export class StashImportService {
         forceOutputDir: true,
         filename,
         forceDirect: true,
+        fallbackUrl: item.url,
+        galleryIndex: index + 1,
         onProgress,
         onJobStart,
       });

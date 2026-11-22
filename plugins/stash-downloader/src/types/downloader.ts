@@ -175,6 +175,8 @@ export interface IPluginSettings {
   serverDownloadPath?: string;
   /** Custom path to yt-dlp binary. Leave empty for auto-detection (Python module first, then PATH). */
   ytdlpPath?: string;
+  /** Custom path to gallery-dl binary, used as a TikTok fallback. */
+  galleryDlPath?: string;
   httpProxy?: string;
   autoCreatePerformers: boolean;
   autoCreateTags: boolean;

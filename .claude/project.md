@@ -185,6 +185,17 @@ pip install -U "yt-dlp[default,curl-cffi]"
 docker exec -it stash pip install -U --break-system-packages "yt-dlp[default,curl-cffi]"
 ```
 
+### TikTok gallery-dl Fallback
+For TikTok metadata or downloads that still fail with yt-dlp, the backend can use gallery-dl as a fallback:
+
+```bash
+python -m pip install gallery-dl
+# Docker:
+docker exec -it stash pip install --break-system-packages gallery-dl
+```
+
+The backend auto-detects the gallery-dl Python module or CLI on PATH. If Stash runs it in a different environment, set **gallery-dl Path** in the plugin settings. TikTok photo-post gallery imports also retry an image through gallery-dl using that post's original URL and image index.
+
 ### Common Site-Specific Issues
 - **XHamster**: Extractor updates frequently needed (check [yt-dlp issues](https://github.com/yt-dlp/yt-dlp/issues))
 - **rule34video.com**: yt-dlp's extractor is broken (site markup changed). `download.py` falls back to `extract_rule34video()` (parses download links/flashvars, JSON-LD, tag chips). Video URLs carry short-lived `v-acctoken` tokens and the CDN 403s non-browser User-Agents, so downloads re-parse the page for fresh URLs and use a browser UA
