@@ -169,6 +169,12 @@ export class ScraperRegistry {
         }
       }
 
+      if (this.scrapers.some(scraper =>
+        scraper instanceof TikTokPhotoScraper && scraper.canHandle(url)
+      )) {
+        throw primaryError;
+      }
+
       // Last resort: fallback scraper
       log.warn('All scrapers failed - using generic fallback (minimal metadata only)');
       const fallbackResult = await this.fallbackScraper.scrape(url);

@@ -419,8 +419,14 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
     Returns:
         dict with metadata on success, or dict with 'extraction_error' key on failure
     """
-    if is_tiktok_photo_url(url):
-        return extract_tiktok_photo_post(url, proxy=proxy)
+    is_tiktok_photo = is_tiktok_photo_url(url)
+    tiktok_photo_error = None
+    if is_tiktok_photo:
+        photo_metadata = extract_tiktok_photo_post(url, proxy=proxy)
+        if "extraction_error" not in photo_metadata:
+            return photo_metadata
+        tiktok_photo_error = photo_metadata["extraction_error"]
+        log.warning("Direct TikTok photo-page parsing failed; trying yt-dlp")
 
     # rule34video: yt-dlp's extractor is broken (see extract_rule34video), so use the
     # built-in page parser first and only fall back to yt-dlp if it returns nothing
@@ -432,10 +438,11 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
         log.warning("Built-in rule34video parser returned nothing, trying yt-dlp")
 
     cmd = get_ytdlp_cmd(ytdlp_path) + [
-        "--dump-json",
+        "--dump-single-json" if is_tiktok_photo else "--dump-json",
         "--no-download",
-        "--no-playlist",
     ]
+    if not is_tiktok_photo:
+        cmd.append("--no-playlist")
 
     # Add proxy if provided
     if proxy:
@@ -454,7 +461,18 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
 
         if result.returncode == 0 and result.stdout:
             log.info("✓ Metadata extracted")
-            return json.loads(result.stdout)
+            metadata = json.loads(result.stdout)
+            if is_tiktok_photo:
+                gallery_metadata = _normalize_tiktok_gallery_metadata(metadata, url)
+                if gallery_metadata:
+                    return gallery_metadata
+                return {
+                    "extraction_error": (
+                        f"{tiktok_photo_error}; yt-dlp returned metadata but no carousel image URLs"
+                    ),
+                    "used_proxy": bool(proxy),
+                }
+            return metadata
         else:
             # Enhanced error logging with proxy context
             error_msg = result.stderr or result.stdout or "Unknown error"
@@ -465,6 +483,11 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
                 fallback = extract_rule34video(url, proxy=proxy)
                 if fallback:
                     return fallback
+            if is_tiktok_photo:
+                return {
+                    "extraction_error": f"{tiktok_photo_error}; yt-dlp fallback failed: {clean_error}",
+                    "used_proxy": bool(proxy),
+                }
             if proxy:
                 log.error(f"yt-dlp extraction FAILED (proxy {proxy}): {error_msg[:200]}")
             else:
@@ -475,15 +498,30 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
         if proxy:
             timeout_msg += f" (proxy: {proxy})"
         log.error(f"yt-dlp TIMED OUT: {timeout_msg}")
+        if is_tiktok_photo:
+            return {
+                "extraction_error": f"{tiktok_photo_error}; yt-dlp fallback {timeout_msg}",
+                "used_proxy": bool(proxy),
+            }
         return {"extraction_error": timeout_msg, "used_proxy": bool(proxy)}
     except json.JSONDecodeError as e:
         log.error(f"Failed to parse yt-dlp output: {e}", exc_info=True)
+        if is_tiktok_photo:
+            return {
+                "extraction_error": f"{tiktok_photo_error}; yt-dlp returned invalid JSON: {e}",
+                "used_proxy": bool(proxy),
+            }
         return {"extraction_error": f"Failed to parse yt-dlp output: {e}", "used_proxy": bool(proxy)}
     except Exception as e:
         error_msg = f"Extraction error: {e}"
         if proxy:
             error_msg += f" (proxy: {proxy})"
         log.error(error_msg, exc_info=True)
+        if is_tiktok_photo:
+            return {
+                "extraction_error": f"{tiktok_photo_error}; yt-dlp fallback failed: {error_msg}",
+                "used_proxy": bool(proxy),
+            }
         return {"extraction_error": str(e), "used_proxy": bool(proxy)}
 
 
@@ -616,6 +654,10 @@ def _tiktok_image_url(image: Any) -> Optional[str]:
     if not isinstance(image, dict):
         return None
 
+    direct_url = image.get("url") or image.get("image_url") or image.get("thumbnail")
+    if isinstance(direct_url, str) and direct_url:
+        return f"https:{direct_url}" if direct_url.startswith("//") else direct_url
+
     for key in (
         "imageURL", "image_url", "originImage", "origin_image",
         "displayImage", "display_image", "ownerWatermarkImage", "owner_watermark_image",
@@ -637,6 +679,51 @@ def _tiktok_image_url(image: Any) -> Optional[str]:
             return f"https:{url}" if url.startswith("//") else url
 
     return None
+
+
+def _normalize_tiktok_gallery_metadata(metadata: Any, page_url: str) -> Optional[dict]:
+    if not isinstance(metadata, dict):
+        return None
+
+    image_entries = metadata.get("gallery_images") or metadata.get("images") or metadata.get("entries")
+    if not isinstance(image_entries, list) or not image_entries:
+        return None
+
+    url_match = TIKTOK_PHOTO_URL_RE.match(page_url)
+    post_id = str(metadata.get("id") or (url_match.group(1) if url_match else "post"))
+    gallery_images = []
+    seen_urls = set()
+    for index, image_entry in enumerate(image_entries, start=1):
+        image_url = image_entry if isinstance(image_entry, str) else _tiktok_image_url(image_entry)
+        if not image_url or not image_url.startswith(("http://", "https://")) or image_url in seen_urls:
+            continue
+        seen_urls.add(image_url)
+
+        extension = os.path.splitext(image_url.split("?", 1)[0].split("#", 1)[0])[1].lower()
+        if extension not in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}:
+            entry_extension = image_entry.get("ext") if isinstance(image_entry, dict) else None
+            extension = f".{entry_extension.lower()}" if isinstance(entry_extension, str) else ".jpg"
+        if extension not in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}:
+            extension = ".jpg"
+
+        image_info = image_entry if isinstance(image_entry, dict) else {}
+        gallery_images.append({
+            "url": image_url,
+            "thumbnail_url": image_info.get("thumbnail") or image_url,
+            "filename": image_info.get("filename") or f"tiktok-{post_id}-{index:02d}{extension}",
+            "width": image_info.get("width"),
+            "height": image_info.get("height"),
+        })
+
+    if not gallery_images:
+        return None
+
+    normalized = dict(metadata)
+    normalized["gallery_images"] = gallery_images
+    normalized["content_type"] = "gallery"
+    normalized["webpage_url"] = normalized.get("webpage_url") or page_url
+    normalized["thumbnail"] = normalized.get("thumbnail") or gallery_images[0]["url"]
+    return normalized
 
 
 def _parse_tiktok_photo_html(html: str, page_url: str) -> Optional[dict]:
@@ -769,8 +856,7 @@ def extract_tiktok_photo_post(url: str, proxy: Optional[str] = None) -> dict:
             detail = "TikTok returned no carousel data"
         return {
             "extraction_error": (
-                f"{detail} (HTTP {status_code}, content type {content_type}). "
-                "Photo extraction reads TikTok page data directly and does not use the configured yt-dlp path."
+                f"{detail} (HTTP {status_code}, content type {content_type})"
             )
         }
     except requests.RequestException as e:

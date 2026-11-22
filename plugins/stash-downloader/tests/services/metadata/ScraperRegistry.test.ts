@@ -76,15 +76,15 @@ describe('ScraperRegistry', () => {
       expect(scraper.name).toBe('TikTok Photos');
     });
 
-    it('does not retry the same yt-dlp backend after a TikTok photo extraction failure', async () => {
+    it('does not retry yt-dlp or mask failed TikTok photo extraction with generic metadata', async () => {
       const extraction = vi.spyOn(getStashService(), 'runPluginOperationWithError')
         .mockResolvedValue({ data: null, error: 'TikTok photo extraction failed' });
       const registry = new ScraperRegistry();
 
-      await registry.scrapeWithEnhancement(
+      await expect(registry.scrapeWithEnhancement(
         'https://www.tiktok.com/@creator/photo/123456789',
         ContentType.Gallery
-      );
+      )).rejects.toThrow('TikTok photo extraction failed');
 
       expect(extraction).toHaveBeenCalledOnce();
     });
