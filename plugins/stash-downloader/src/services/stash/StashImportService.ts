@@ -54,6 +54,7 @@ export class StashImportService {
       throw new Error('Item must have edited metadata before import');
     }
 
+    const contentType = item.metadata?.contentType || ContentType.Video;
     const itemTitle = item.editedMetadata?.title || item.metadata?.title || item.url;
     log.info('Starting import for:', JSON.stringify({
       url: item.url,
@@ -134,7 +135,7 @@ export class StashImportService {
       },
       fallbackUrl, // Original page URL for yt-dlp if direct download fails
       filename: downloadFilename, // Use scraped title as filename
-    });
+    }, item.metadata?.videoUrl, item.metadata?.imageUrl, contentType);
 
     // Check if this was a server-side download (file already on disk)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Custom properties added to Blob for server download info
@@ -371,8 +372,6 @@ export class StashImportService {
     if (onLog) onLog('info', `Resolved ${performerIds.length} performers, ${tagIds.length} tags, ${studioId ? '1 studio' : '0 studios'}`);
 
     // Create scene or image based on content type
-    const contentType = item.metadata?.contentType || ContentType.Video;
-
     let result: IStashScene | IStashImage;
 
     if (onStatusChange) onStatusChange('Creating entry in Stash...');

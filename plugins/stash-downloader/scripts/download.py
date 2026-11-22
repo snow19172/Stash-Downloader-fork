@@ -727,8 +727,10 @@ def download_direct_file(
 
         # Ensure filename has an extension
         if "." not in filename:
-            # Try to determine from Content-Type later, default to .mp4
-            filename += ".mp4"
+            # Keep the media type when a caller supplies a title without an extension.
+            path_extension = os.path.splitext(parsed.path)[1].lower()
+            image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+            filename += path_extension if path_extension in image_extensions else ".mp4"
 
         output_path = os.path.join(output_dir, filename)
 
