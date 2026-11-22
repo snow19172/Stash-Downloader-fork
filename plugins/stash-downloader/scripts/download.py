@@ -7,7 +7,7 @@ It's invoked via Stash's runPluginTask GraphQL mutation.
 
 Requirements:
 - Python 3.7+
-- yt-dlp (pip install yt-dlp)
+- yt-dlp (pip install "yt-dlp[default,curl-cffi]")
 - requests (pip install requests)
 
 Usage:
@@ -28,7 +28,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 # Configure logging
 # Stash shows stderr in its logs. Use INFO by default so messages appear correctly.
@@ -283,10 +283,10 @@ def install_ytdlp() -> bool:
 
     # Try standard pip install first
     install_commands = [
-        [sys.executable, "-m", "pip", "install", "yt-dlp"],
+        [sys.executable, "-m", "pip", "install", "yt-dlp[default,curl-cffi]"],
         # Fallback for externally-managed environments (Docker Alpine, etc.)
-        [sys.executable, "-m", "pip", "install", "--user", "yt-dlp"],
-        [sys.executable, "-m", "pip", "install", "--break-system-packages", "yt-dlp"],
+        [sys.executable, "-m", "pip", "install", "--user", "yt-dlp[default,curl-cffi]"],
+        [sys.executable, "-m", "pip", "install", "--break-system-packages", "yt-dlp[default,curl-cffi]"],
     ]
 
     for cmd in install_commands:
@@ -328,7 +328,7 @@ def check_ytdlp(custom_path: Optional[str] = None) -> bool:
             return True
 
     log.error(
-        "yt-dlp is not installed. Install it with: pip install yt-dlp\n"
+        'yt-dlp is not installed. Install it with: pip install "yt-dlp[default,curl-cffi]"\n'
         "Or set a custom path in plugin settings (ytdlpPath)."
     )
     return False
@@ -963,7 +963,7 @@ def download_video(
     proxy: Optional[str] = None,
     progress_id: Optional[str] = None,
     ytdlp_path: Optional[str] = None,
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """
     Download video using yt-dlp with real-time progress reporting.
 
@@ -978,7 +978,7 @@ def download_video(
         ytdlp_path: Optional custom path to yt-dlp binary
 
     Returns:
-        Path to downloaded file, or None if failed
+        Downloaded file path and no error, or None and the yt-dlp failure reason
     """
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
@@ -1057,6 +1057,7 @@ def download_video(
         )
 
         stdout_lines = []  # To capture the final file path
+        error_lines = []
         last_progress_update = 0
         progress_update_interval = 0.5  # Update progress file every 0.5 seconds
 
@@ -1135,6 +1136,7 @@ def download_video(
                                 last_progress_update = current_time
                         elif "ERROR" in line or "error" in line.lower():
                             log.error(f"yt-dlp: {line}")
+                            error_lines.append(line[:400])
 
         log.info(f"Finished reading output: {lines_read} lines, {progress_updates} progress updates")
 
@@ -1155,7 +1157,7 @@ def download_video(
                         "file_path": file_path,
                         "last_updated": time.time(),
                     })
-                return file_path
+                return file_path, None
             else:
                 # Try to find the file in output directory
                 log.warning("Could not determine output path, searching directory...")
@@ -1170,10 +1172,10 @@ def download_video(
                             "file_path": str(newest),
                             "last_updated": time.time(),
                         })
-                    return str(newest)
+                    return str(newest), None
 
         # Failed - update progress with error
-        error_msg = "Download failed"
+        error_msg = "\n".join(error_lines[-3:]) or f"yt-dlp exited with status {process.returncode}"
         if progress_id:
             save_result(f"progress-{progress_id}", {
                 "status": "error",
@@ -1185,7 +1187,7 @@ def download_video(
             log.error(f"yt-dlp download failed (using proxy {proxy})")
         else:
             log.error(f"yt-dlp download failed (no proxy)")
-        return None
+        return None, error_msg
 
     except subprocess.TimeoutExpired:
         timeout_msg = f"Download timed out after 1 hour"
@@ -1194,7 +1196,7 @@ def download_video(
         log.error(timeout_msg)
         if progress_id:
             save_result(f"progress-{progress_id}", {"status": "error", "error": timeout_msg, "last_updated": time.time()})
-        return None
+        return None, timeout_msg
     except Exception as e:
         error_msg = f"Download error: {e}"
         if proxy:
@@ -1202,7 +1204,7 @@ def download_video(
         log.error(error_msg, exc_info=True)
         if progress_id:
             save_result(f"progress-{progress_id}", {"status": "error", "error": str(e), "last_updated": time.time()})
-        return None
+        return None, error_msg
 
 
 def task_download(args: dict) -> dict:
@@ -1292,7 +1294,7 @@ def task_download(args: dict) -> dict:
 
     # Check yt-dlp availability
     if not check_ytdlp(ytdlp_path):
-        result = {"result_error": "yt-dlp is not installed or not accessible. Install with: pip install yt-dlp (or set ytdlpPath in plugin settings)", "success": False}
+        result = {"result_error": 'yt-dlp is not installed or not accessible. Install with: pip install "yt-dlp[default,curl-cffi]" (or set ytdlpPath in plugin settings)', "success": False}
         if result_id:
             save_result(result_id, result)
         return result
@@ -1307,7 +1309,10 @@ def task_download(args: dict) -> dict:
 
     # Download using yt-dlp (with proxy if provided)
     # Use ytdlp_url which may be the original page URL if direct download failed
-    file_path = download_video(ytdlp_url, output_dir, template, quality, proxy=proxy, progress_id=progress_id, ytdlp_path=ytdlp_path)
+    file_path, download_error = download_video(
+        ytdlp_url, output_dir, template, quality,
+        proxy=proxy, progress_id=progress_id, ytdlp_path=ytdlp_path,
+    )
 
     if file_path:
         file_size = os.path.getsize(file_path)
@@ -1318,7 +1323,13 @@ def task_download(args: dict) -> dict:
             log.debug(f"Download result saved with result_id: {result_id}")
         return result
     else:
-        result = {"result_error": "Download failed", "success": False}
+        error_msg = download_error or "Download failed"
+        if re.search(r"^https?://(?:[\w-]+\.)*tiktok\.com(?:[:/]|$)", ytdlp_url, re.IGNORECASE):
+            if ytdlp_path:
+                error_msg += " Update the configured yt-dlp binary and ensure curl-cffi is installed in its Python environment."
+            else:
+                error_msg += ' Update yt-dlp on the Stash server with: pip install -U "yt-dlp[default,curl-cffi]".'
+        result = {"result_error": error_msg, "success": False}
         if result_id:
             save_result(result_id, result)
         return result
@@ -1355,7 +1366,7 @@ def task_extract_metadata(args: dict) -> dict:
         return result
 
     if not check_ytdlp(ytdlp_path):
-        result = {"result_error": "yt-dlp is not installed. Install with: pip install yt-dlp (or set ytdlpPath in plugin settings)", "success": False}
+        result = {"result_error": 'yt-dlp is not installed. Install with: pip install "yt-dlp[default,curl-cffi]" (or set ytdlpPath in plugin settings)', "success": False}
         if result_id:
             save_result(result_id, result)
         return result
@@ -1561,7 +1572,7 @@ def task_check_ytdlp(args: dict) -> dict:
             "available": False,
             "success": True,
             "version": None,
-            "status_message": "yt-dlp not installed. Install with: pip install yt-dlp",
+            "status_message": 'yt-dlp not installed. Install with: pip install "yt-dlp[default,curl-cffi]"',
             "resolution_method": None,
         }
 

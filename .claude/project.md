@@ -151,7 +151,7 @@ The plugin auto-detects yt-dlp in this order:
 1. **Custom path** from plugin settings (`ytdlpPath`)
 2. **Python module**: `python -m yt_dlp` (same Python env as Stash - no PATH needed)
 3. **CLI binary**: `yt-dlp` on system PATH (legacy fallback)
-4. **Auto-install**: Attempts `pip install yt-dlp` if not found
+4. **Auto-install**: Attempts `pip install "yt-dlp[default,curl-cffi]"` if not found
 
 If yt-dlp is installed but not detected (common in Docker/service setups):
 - Set the **yt-dlp Path** setting in Stash → Settings → Plugins → Stash Downloader
@@ -161,28 +161,28 @@ The Server Config panel in the plugin UI shows which detection method found yt-d
 
 **Install yt-dlp (standard):**
 ```bash
-pip install yt-dlp
+pip install "yt-dlp[default,curl-cffi]"
 # Verify with Python module (no PATH needed):
 python -m yt_dlp --version
 ```
 
 **Install yt-dlp (Docker - Alpine-based Stash image):**
 ```bash
-docker exec -it stash pip install yt-dlp --break-system-packages
+docker exec -it stash pip install --break-system-packages "yt-dlp[default,curl-cffi]"
 # Verify:
 docker exec -it stash python -m yt_dlp --version
 ```
 
-Note: Lost on container recreation. For persistence, use custom Dockerfile with `RUN pip install yt-dlp --break-system-packages`.
+Note: Lost on container recreation. For persistence, use custom Dockerfile with `RUN pip install --break-system-packages "yt-dlp[default,curl-cffi]"`.
 
 ### yt-dlp Extraction Failures
 If scraping fails with errors like "No video formats found" or "Failed to extract metadata", yt-dlp likely needs updating. Site extractors break frequently as sites change their structure.
 
 **Update yt-dlp:**
 ```bash
-pip install -U yt-dlp
+pip install -U "yt-dlp[default,curl-cffi]"
 # Docker:
-docker exec -it stash pip install -U yt-dlp --break-system-packages
+docker exec -it stash pip install -U --break-system-packages "yt-dlp[default,curl-cffi]"
 ```
 
 ### Common Site-Specific Issues

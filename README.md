@@ -64,7 +64,7 @@ Download videos and images directly to your Stash library with automatic metadat
 ### Requirements
 
 - Stash v0.20+
-- Python 3.7+ with yt-dlp (`pip install yt-dlp`)
+- Python 3.7+ with yt-dlp; TikTok downloads require current yt-dlp with `curl-cffi` (`pip install -U "yt-dlp[default,curl-cffi]"`)
 
 ### Quick Start
 
@@ -211,12 +211,12 @@ See [Development Guide](docs/DEVELOPMENT.md) for architecture details.
 
 **yt-dlp not working?**
 ```bash
-pip install -U yt-dlp  # Update to latest
+pip install -U "yt-dlp[default,curl-cffi]"  # Update yt-dlp and install TikTok request impersonation support
 ```
 
 **Docker users:**
 ```bash
-docker exec -it stash pip install -U yt-dlp --break-system-packages
+docker exec -it stash pip install -U --break-system-packages "yt-dlp[default,curl-cffi]"
 ```
 
 **Autocomplete not showing results?**

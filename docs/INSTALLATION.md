@@ -4,7 +4,7 @@
 
 - Stash v0.20 or later
 - Internet connection for downloading content
-- Python 3.7+ with yt-dlp for server-side video downloads (Stash Downloader)
+- Python 3.7+ with yt-dlp for server-side video downloads (Stash Downloader); TikTok requires current yt-dlp with `curl-cffi`
 
 ---
 
@@ -43,7 +43,7 @@ Click **"Install"** on the plugin(s) you want, then **"Reload Plugins"** if need
 ### Stash Downloader
 
 #### Requirements
-- Python 3.7+ with yt-dlp (`pip install yt-dlp`)
+- Python 3.7+ with yt-dlp (`pip install "yt-dlp[default,curl-cffi]"`)
 
 #### Configuration
 Go to **Settings** → **Plugins** → **Stash Downloader**:
@@ -146,7 +146,7 @@ yt-dlp is required for Stash Downloader's server-side video downloads and metada
 ### Standard Installation
 
 ```bash
-pip install yt-dlp
+pip install "yt-dlp[default,curl-cffi]"
 
 # Verify installation
 yt-dlp --version
@@ -158,7 +158,7 @@ The official Stash Docker image is Alpine-based:
 
 ```bash
 # Install/update yt-dlp (replace 'stash' with your container name)
-docker exec -it stash pip install -U yt-dlp --break-system-packages
+docker exec -it stash pip install -U --break-system-packages "yt-dlp[default,curl-cffi]"
 
 # Verify installation
 docker exec -it stash yt-dlp --version
@@ -168,7 +168,7 @@ docker exec -it stash yt-dlp --version
 
 ```dockerfile
 FROM stashapp/stash:latest
-RUN pip install -U yt-dlp --break-system-packages
+RUN pip install -U --break-system-packages "yt-dlp[default,curl-cffi]"
 ```
 
 ### Keeping yt-dlp Updated
@@ -177,12 +177,12 @@ Site extractors break frequently as websites change. Update regularly:
 
 ```bash
 # Standard
-pip install -U yt-dlp
+pip install -U "yt-dlp[default,curl-cffi]"
 # or
 yt-dlp -U
 
 # Docker
-docker exec -it stash pip install -U yt-dlp --break-system-packages
+docker exec -it stash pip install -U --break-system-packages "yt-dlp[default,curl-cffi]"
 ```
 
 ---
