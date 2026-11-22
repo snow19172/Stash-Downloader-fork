@@ -66,18 +66,20 @@ export class StashImportService {
     if (onLog) onLog('info', `Starting import for: ${itemTitle}`);
 
     // Determine which URL to download from
-    // For yt-dlp sites, always use the original page URL (yt-dlp handles finding the video)
-    // For other sites, use direct video URL if available
+    // For yt-dlp sites, use the original page URL; extracted media URLs may expire or reject generic requests.
     let downloadUrl = item.url;
+    let isYtDlpSite = false;
 
     // Only use videoUrl if it's a valid absolute URL and we're not using yt-dlp
     if (item.metadata?.videoUrl) {
       try {
         const videoUrlObj = new URL(item.metadata.videoUrl);
-        // If it's a valid absolute URL and not from a yt-dlp site, use it
-        const isYtDlpSite = ['youporn.com', 'pornhub.com', 'www.pornhub.com', 'www.youporn.com'].some(domain =>
-          item.url.toLowerCase().includes(domain)
+        const hostname = new URL(item.url).hostname.toLowerCase();
+        isYtDlpSite = ['youporn.com', 'pornhub.com', 'tiktok.com'].some(domain =>
+          hostname === domain || hostname.endsWith(`.${domain}`)
         );
+
+        // If it's a valid absolute URL and not from a yt-dlp site, use it
         if (!isYtDlpSite) {
           downloadUrl = videoUrlObj.href;
           log.debug('Using direct video URL:', downloadUrl);
@@ -135,7 +137,7 @@ export class StashImportService {
       },
       fallbackUrl, // Original page URL for yt-dlp if direct download fails
       filename: downloadFilename, // Use scraped title as filename
-    }, item.metadata?.videoUrl, item.metadata?.imageUrl, contentType);
+    }, isYtDlpSite ? undefined : item.metadata?.videoUrl, item.metadata?.imageUrl, contentType);
 
     // Check if this was a server-side download (file already on disk)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Custom properties added to Blob for server download info

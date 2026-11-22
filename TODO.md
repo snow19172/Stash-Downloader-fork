@@ -31,7 +31,7 @@
 - [ ] Add integration tests for download flow
 
 ## Completed
-- [x] Improve TikTok compatibility by installing yt-dlp's curl-cffi support and surfacing extraction errors with update guidance
+- [x] Improve TikTok compatibility with yt-dlp's curl-cffi support, original-page imports, and actionable download errors
 - [x] Preserve detected image type and scraped image URL through the import download flow
 - [x] Edit & Import advances to the next pending item on click (import continues in background); finished imports no longer reopen the modal
 - [x] Large downloads no longer cancelled at 10 min: stall detection (5 min without progress, READY time excluded) + Range-resume of dropped direct downloads
