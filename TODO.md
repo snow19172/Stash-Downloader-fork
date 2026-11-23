@@ -33,7 +33,7 @@
 ## Completed
 - [x] Improve TikTok compatibility with yt-dlp's curl-cffi support, original-page imports, and actionable download errors
 - [x] Import TikTok photo posts as Stash galleries with uploader metadata and automatic image linking
-- [x] Add gallery-dl metadata/version/path reporting, dedicated output directory, and exact-file Stash scans
+- [x] Add gallery-dl metadata/version/path reporting, honor its configured directory for TikTok photo imports, and scan exact files
 - [x] Preserve detected image type and scraped image URL through the import download flow
 - [x] Edit & Import advances to the next pending item on click (import continues in background); finished imports no longer reopen the modal
 - [x] Large downloads no longer cancelled at 10 min: stall detection (5 min without progress, READY time excluded) + Range-resume of dropped direct downloads

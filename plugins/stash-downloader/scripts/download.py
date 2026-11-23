@@ -1899,6 +1899,8 @@ def task_download(args: dict) -> dict:
         return result
 
     gallery_output_dir = gallery_dl_download_path or os.path.join(output_dir, "gallery-dl")
+    is_tiktok_photo_import = force_direct and is_tiktok_photo_url(fallback_url)
+    direct_output_dir = gallery_output_dir if is_tiktok_photo_import else output_dir
 
     # Track which URL to use for yt-dlp fallback
     ytdlp_url = url
@@ -1906,7 +1908,9 @@ def task_download(args: dict) -> dict:
     # Check if this is a direct file URL (try direct download first, fallback to yt-dlp)
     if force_direct or is_direct_file_url(url):
         log.info(f"Detected direct file URL, trying direct download first")
-        file_path = download_direct_file(url, output_dir, filename, proxy=proxy, progress_id=progress_id)
+        if is_tiktok_photo_import:
+            log.info(f"Saving TikTok photo image to gallery-dl download directory: {direct_output_dir}")
+        file_path = download_direct_file(url, direct_output_dir, filename, proxy=proxy, progress_id=progress_id)
 
         if file_path:
             file_size = os.path.getsize(file_path)
