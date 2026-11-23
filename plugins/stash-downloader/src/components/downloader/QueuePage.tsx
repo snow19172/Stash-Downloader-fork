@@ -46,6 +46,13 @@ export const QueuePage: React.FC = () => {
   const [showAboutModal, setShowAboutModal] = useState(false);
   const [ytDlpVersion, setYtDlpVersion] = useState<string | null>(null);
   const [ytDlpResolutionMethod, setYtDlpResolutionMethod] = useState<string | null>(null);
+  const [galleryDlStatus, setGalleryDlStatus] = useState<{
+    available: boolean;
+    version?: string;
+    resolvedPath?: string;
+    resolutionMethod?: string;
+    statusMessage?: string;
+  } | null>(null);
 
   // Batch import state
   const [isBatchImporting, setIsBatchImporting] = useState(false);
@@ -72,6 +79,7 @@ export const QueuePage: React.FC = () => {
   // Get proxy info for display
   const httpProxy = settings.httpProxy;
   const serverDownloadPath = settings.serverDownloadPath || DEFAULT_SETTINGS.serverDownloadPath;
+  const galleryDlPath = settings.galleryDlPath;
   const galleryDlDownloadPath = settings.galleryDlDownloadPath;
   
   // Fetch and sync settings from Stash on mount (once, no polling)
@@ -172,6 +180,31 @@ export const QueuePage: React.FC = () => {
 
     checkYtDlp();
   }, [isStashEnvironment]);
+
+  useEffect(() => {
+    if (!isStashEnvironment) return;
+
+    const checkGalleryDl = async () => {
+      try {
+        const { getDownloadService } = await import('@/services/download');
+        const result = await getDownloadService().checkServerGalleryDl(galleryDlPath);
+        setGalleryDlStatus(result);
+        if (result.available) {
+          debugLog.debug(
+            `gallery-dl version: ${result.version || 'unknown'} (${result.resolvedPath || result.resolutionMethod || 'unknown path'})`
+          );
+        } else {
+          debugLog.debug(`gallery-dl unavailable: ${result.statusMessage || 'not found'}`);
+        }
+      } catch (error) {
+        const statusMessage = error instanceof Error ? error.message : String(error);
+        debugLog.warn('Could not check gallery-dl:', statusMessage);
+        setGalleryDlStatus({ available: false, statusMessage: `Version check failed: ${statusMessage}` });
+      }
+    };
+
+    checkGalleryDl();
+  }, [isStashEnvironment, galleryDlPath]);
 
   const handleAddUrl = async (url: string, contentTypeOption: ContentTypeOption = 'auto') => {
     // Clear URL field after adding
@@ -815,6 +848,46 @@ export const QueuePage: React.FC = () => {
                           <span className="badge bg-danger">Not Found</span>
                           <small style={{ color: '#8b9fad' }}>pip install yt-dlp, or set path in settings</small>
                         </div>
+                      )}
+                    </div>
+                    <div className="d-flex justify-content-between align-items-start">
+                      <span style={{ color: '#8b9fad' }}>gallery-dl:</span>
+                      {galleryDlStatus?.available ? (
+                        <div className="d-flex flex-column align-items-end gap-1">
+                          <div className="d-flex align-items-center gap-2">
+                            <span className="badge bg-success">Installed</span>
+                            <code className="text-light" style={{ fontSize: '0.85em' }}>
+                              {galleryDlStatus.version}
+                            </code>
+                            {galleryDlStatus.resolutionMethod && (
+                              <small style={{ color: '#8b9fad' }}>({galleryDlStatus.resolutionMethod})</small>
+                            )}
+                          </div>
+                          {galleryDlStatus.resolvedPath && (
+                            <code
+                              className="text-light text-break"
+                              style={{ fontSize: '0.8em', maxWidth: '32rem', textAlign: 'right' }}
+                            >
+                              {galleryDlStatus.resolvedPath}
+                            </code>
+                          )}
+                        </div>
+                      ) : galleryDlStatus ? (
+                        <div className="d-flex flex-column align-items-end gap-1">
+                          <div className="d-flex align-items-center gap-2">
+                            <span className="badge bg-danger">Not Found</span>
+                            <small style={{ color: '#8b9fad' }}>
+                              {galleryDlStatus.statusMessage || 'pip install gallery-dl, or set path in settings'}
+                            </small>
+                          </div>
+                          {galleryDlStatus.resolvedPath && (
+                            <code className="text-light text-break" style={{ fontSize: '0.8em', textAlign: 'right' }}>
+                              {galleryDlStatus.resolvedPath}
+                            </code>
+                          )}
+                        </div>
+                      ) : (
+                        <small style={{ color: '#8b9fad' }}>Checking...</small>
                       )}
                     </div>
                     <div className="d-flex justify-content-between align-items-center">

@@ -79,6 +79,10 @@ tasks:
     description: Check if yt-dlp is installed and available
     defaultArgs:
       mode: check_ytdlp
+  - name: Check gallery-dl
+    description: Check if gallery-dl is installed and available
+    defaultArgs:
+      mode: check_gallery_dl
   - name: Test Proxy
     description: Test proxy connectivity by fetching a URL
     defaultArgs:

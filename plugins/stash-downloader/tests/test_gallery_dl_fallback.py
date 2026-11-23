@@ -70,6 +70,21 @@ class GalleryDlFallbackTests(unittest.TestCase):
         self.assertIn("--proxy", command)
         self.assertIn("http://proxy.example:8080", command)
 
+    @patch.object(backend.subprocess, "run")
+    @patch.object(backend, "get_gallery_dl_cmd", return_value=[sys.executable, "-m", "gallery_dl"])
+    def test_gallery_dl_check_reports_version_and_python_module_path(self, _get_command, run):
+        run.return_value.returncode = 0
+        run.return_value.stdout = "1.29.2\n"
+        run.return_value.stderr = ""
+
+        result = backend.task_check_gallery_dl({})
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["version"], "1.29.2")
+        self.assertEqual(result["resolved_path"], f"{sys.executable} -m gallery_dl")
+        self.assertEqual(result["resolution_method"], "Python module")
+        self.assertEqual(run.call_args.args[0][-1], "--version")
+
     @patch.object(backend, "extract_gallery_dl_tiktok_metadata")
     @patch.object(backend.subprocess, "run")
     @patch.object(backend, "get_ytdlp_cmd", return_value=["yt-dlp"])

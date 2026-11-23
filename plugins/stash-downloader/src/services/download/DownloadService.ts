@@ -134,7 +134,7 @@ export class DownloadService {
         quality: options.quality || 'best',
         has_proxy: !!httpProxy,
         has_ytdlp_path: !!ytdlpPath,
-        has_gallery_dl_path: !!galleryDlPath,
+        gallery_dl_executable: galleryDlPath || 'auto-detect',
         gallery_dl_download_path: galleryDlDownloadPath || `${serverDownloadPath || '<download destination>'}/gallery-dl`,
       }));
 
@@ -349,6 +349,49 @@ export class DownloadService {
       };
     } catch {
       return { available: false };
+    }
+  }
+
+  /** Check gallery-dl availability and report the resolved executable path. */
+  async checkServerGalleryDl(
+    customPath?: string
+  ): Promise<{
+    available: boolean;
+    version?: string;
+    resolvedPath?: string;
+    resolutionMethod?: string;
+    statusMessage?: string;
+  }> {
+    try {
+      const stashService = getStashService();
+
+      if (!stashService.isStashEnvironment()) {
+        return { available: false };
+      }
+
+      const settings = getStorageItem<IPluginSettings>(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+      const result = await stashService.runPluginOperation(PLUGIN_ID, {
+        mode: 'check_gallery_dl',
+        gallery_dl_path: customPath ?? settings.galleryDlPath,
+      }) as {
+        available?: boolean;
+        version?: string;
+        resolved_path?: string;
+        resolution_method?: string;
+        status_message?: string;
+      } | null;
+
+      return {
+        available: result?.available === true,
+        version: result?.version || undefined,
+        resolvedPath: result?.resolved_path || undefined,
+        resolutionMethod: result?.resolution_method || undefined,
+        statusMessage: result?.status_message || undefined,
+      };
+    } catch (error) {
+      const statusMessage = error instanceof Error ? error.message : String(error);
+      log.warn(`gallery-dl check failed: ${statusMessage}`);
+      return { available: false, statusMessage };
     }
   }
 

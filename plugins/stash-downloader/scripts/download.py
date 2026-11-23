@@ -2314,6 +2314,68 @@ def task_check_ytdlp(args: dict) -> dict:
         return {"available": False, "success": True, "version": None, "status_message": "yt-dlp check timed out"}
 
 
+def task_check_gallery_dl(args: dict) -> dict:
+    """Check gallery-dl availability, version, and how its executable was resolved."""
+    custom_path = args.get("gallery_dl_path")
+    cmd = get_gallery_dl_cmd(custom_path)
+    if not cmd:
+        return {
+            "available": False,
+            "success": True,
+            "version": None,
+            "resolved_path": None,
+            "resolution_method": None,
+            "status_message": "gallery-dl not found in the Stash Python environment or PATH",
+        }
+
+    if custom_path:
+        resolved_path = custom_path
+        method = "custom path"
+    elif cmd[0] == sys.executable:
+        resolved_path = f"{sys.executable} -m gallery_dl"
+        method = "Python module"
+    else:
+        resolved_path = cmd[0]
+        method = "CLI on PATH"
+
+    try:
+        result = subprocess.run(cmd + ["--version"], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            return {
+                "available": True,
+                "success": True,
+                "version": result.stdout.strip(),
+                "resolved_path": resolved_path,
+                "resolution_method": method,
+            }
+        return {
+            "available": False,
+            "success": True,
+            "version": None,
+            "resolved_path": resolved_path,
+            "resolution_method": method,
+            "status_message": (result.stderr or result.stdout or "gallery-dl version check failed").strip()[-300:],
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "available": False,
+            "success": True,
+            "version": None,
+            "resolved_path": resolved_path,
+            "resolution_method": method,
+            "status_message": "gallery-dl version check timed out",
+        }
+    except OSError as error:
+        return {
+            "available": False,
+            "success": True,
+            "version": None,
+            "resolved_path": resolved_path,
+            "resolution_method": method,
+            "status_message": f"Could not run gallery-dl: {error}",
+        }
+
+
 def task_test_proxy(args: dict) -> dict:
     """
     Test proxy connectivity by fetching a URL through the proxy.
@@ -2495,6 +2557,7 @@ def main():
             "read_result": task_read_result,
             "cleanup_result": task_cleanup_result,
             "check_ytdlp": task_check_ytdlp,
+            "check_gallery_dl": task_check_gallery_dl,
             "test_proxy": task_test_proxy,
             "fetch_image": task_fetch_image,
         }

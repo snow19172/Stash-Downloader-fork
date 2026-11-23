@@ -76,7 +76,7 @@ describe('StashImportService', () => {
     const download = vi.spyOn(downloadService, 'downloadServerSide')
       .mockResolvedValueOnce({ success: true, file_path: '/stash/images/photo-1.jpg' })
       .mockResolvedValueOnce({ success: true, file_path: '/stash/images/photo-2.jpg' });
-    const scan = vi.spyOn(stashService, 'triggerScanForFile').mockResolvedValue('scan-job');
+    const scan = vi.spyOn(stashService, 'triggerScan').mockResolvedValue('scan-job');
     vi.spyOn(stashService, 'getImageLibraryPath').mockResolvedValue('/stash/images');
     vi.spyOn(stashService, 'waitForJob').mockResolvedValue({ success: true });
     vi.spyOn(stashService, 'findImageByPath')
@@ -121,7 +121,7 @@ describe('StashImportService', () => {
       forceDirect: true,
       filename: 'photo-1.jpg',
     }));
-    expect(scan).toHaveBeenCalledWith('/stash/images/photo-1.jpg');
+    expect(scan).toHaveBeenCalledWith(['/stash/images/photo-1.jpg', '/stash/images/photo-2.jpg']);
     expect(createGallery).toHaveBeenCalledWith(expect.objectContaining({ title: 'TikTok photo post' }));
     expect(addGalleryImages).toHaveBeenCalledWith('gallery-1', ['image-1', 'image-2']);
     expect(setGalleryCover).toHaveBeenCalledWith('gallery-1', 'image-1');

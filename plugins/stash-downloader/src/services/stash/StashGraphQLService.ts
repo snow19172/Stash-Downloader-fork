@@ -1232,15 +1232,10 @@ export class StashGraphQLService {
     }
   }
 
-  /**
-   * Trigger a scan for a specific file path (parent directory)
-   */
+  /** Trigger a scan for one exact file path. */
   async triggerScanForFile(filePath: string): Promise<string | null> {
-    // Get parent directory of the file
-    const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
-    const directory = lastSlash > 0 ? filePath.substring(0, lastSlash) : filePath;
-    log.debug('Triggering scan for directory:', directory);
-    return this.triggerScan([directory]);
+    log.debug('Triggering scan for file:', filePath);
+    return this.triggerScan([filePath]);
   }
 
   /**

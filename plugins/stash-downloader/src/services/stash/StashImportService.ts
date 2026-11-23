@@ -473,7 +473,7 @@ export class StashImportService {
 
     onStatusChange?.('Scanning gallery images...');
     onLog?.('info', `Scanning ${filePaths.length} downloaded image(s) into Stash`);
-    const scanJobId = await this.stashService.triggerScanForFile(filePaths[0]!);
+    const scanJobId = await this.stashService.triggerScan(filePaths);
     if (!scanJobId) {
       throw new Error('Failed to start a Stash scan for the downloaded gallery images');
     }
