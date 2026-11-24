@@ -2,7 +2,7 @@
 # Install with: pip install -r requirements.txt
 
 # Required
-yt-dlp>=2024.01.01       # Video/metadata extraction (primary scraper)
+yt-dlp[default,curl-cffi]>=2024.01.01  # Video/metadata extraction, including TikTok impersonation support
 requests>=2.28.0         # HTTP requests for direct file downloads
 
 # Optional - Reddit features

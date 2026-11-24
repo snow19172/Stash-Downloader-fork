@@ -10,7 +10,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- yt-dlp JSON output has dynamic structure */
 
-import type { IMetadataScraper, IScrapedMetadata } from '@/types';
+import type { IGalleryImage, IMetadataScraper, IScrapedMetadata } from '@/types';
 import { ContentType } from '@/types';
 import { getStashService } from '@/services/stash/StashGraphQLService';
 import { createConcurrencyLimiter, createLogger } from '@/utils';
@@ -53,13 +53,17 @@ export class YtDlpScraper implements IMetadataScraper {
   /**
    * Read proxy and custom yt-dlp path from saved settings
    */
-  private getSettings(): { proxy?: string; ytdlpPath?: string } {
+  private getSettings(): { proxy?: string; ytdlpPath?: string; galleryDlPath?: string } {
     if (typeof window === 'undefined') return {};
     const settings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
     if (!settings) return {};
     try {
       const parsed = JSON.parse(settings);
-      return { proxy: parsed.httpProxy, ytdlpPath: parsed.ytdlpPath };
+      return {
+        proxy: parsed.httpProxy,
+        ytdlpPath: parsed.ytdlpPath,
+        galleryDlPath: parsed.galleryDlPath,
+      };
     } catch {
       // Ignore parse errors
       return {};
@@ -71,7 +75,7 @@ export class YtDlpScraper implements IMetadataScraper {
    */
   private async scrapeServerSide(url: string): Promise<IScrapedMetadata> {
     const stashService = getStashService();
-    const { proxy, ytdlpPath } = this.getSettings();
+    const { proxy, ytdlpPath, galleryDlPath } = this.getSettings();
 
     // Log configuration for troubleshooting
     if (proxy) {
@@ -82,6 +86,9 @@ export class YtDlpScraper implements IMetadataScraper {
     if (ytdlpPath) {
       log.debug(`Using custom yt-dlp path: ${ytdlpPath}`);
     }
+    if (galleryDlPath) {
+      log.debug(`Using custom gallery-dl path: ${galleryDlPath}`);
+    }
 
     // No result_id: Python returns the result directly and writes no temp file.
     // No request timeout: Python bounds extraction itself (yt-dlp/page fetch timeouts).
@@ -91,6 +98,7 @@ export class YtDlpScraper implements IMetadataScraper {
         url: url,
         proxy: proxy, // Pass proxy if configured
         ytdlp_path: ytdlpPath, // Pass custom yt-dlp path if configured
+        gallery_dl_path: galleryDlPath,
       })
     );
 
@@ -101,7 +109,7 @@ export class YtDlpScraper implements IMetadataScraper {
       throw new Error(op.error);
     } else if (op.transportError) {
       log.warn('Extraction request failed, falling back to plugin task');
-      readResult = await this.extractViaTask(url, proxy, ytdlpPath);
+      readResult = await this.extractViaTask(url, proxy, ytdlpPath, galleryDlPath);
     } else {
       if (!op.data) {
         throw new Error('runPluginOperation returned null - check Stash server logs');
@@ -118,7 +126,12 @@ export class YtDlpScraper implements IMetadataScraper {
    * 1. runPluginTask extracts metadata and saves to temp file
    * 2. runPluginOperation reads the result from temp file
    */
-  private async extractViaTask(url: string, proxy?: string, ytdlpPath?: string): Promise<any> {
+  private async extractViaTask(
+    url: string,
+    proxy?: string,
+    ytdlpPath?: string,
+    galleryDlPath?: string
+  ): Promise<any> {
     const stashService = getStashService();
     const resultId = this.generateResultId();
 
@@ -152,6 +165,7 @@ export class YtDlpScraper implements IMetadataScraper {
           result_id: resultId,
           proxy: proxy, // Pass proxy if configured
           ytdlp_path: ytdlpPath, // Pass custom yt-dlp path if configured
+          gallery_dl_path: galleryDlPath,
         },
         {
           maxWaitMs: this.timeoutMs,
@@ -281,7 +295,24 @@ export class YtDlpScraper implements IMetadataScraper {
 
     // Convert to our metadata format
     const tags = readResult.tags || readResult.categories || [];
-    const performers = this.extractPerformers(readResult);
+    const isTikTok = this.isTikTokUrl(url);
+    const performers = this.extractPerformers(readResult, isTikTok);
+    const galleryImages: IGalleryImage[] = Array.isArray(readResult.gallery_images)
+      ? readResult.gallery_images
+        .filter((image: any) => typeof image.url === 'string' && image.url.length > 0)
+        .map((image: any) => ({
+          url: image.url,
+          thumbnailUrl: image.thumbnail_url || image.url,
+          filename: image.filename || undefined,
+          width: image.width || undefined,
+          height: image.height || undefined,
+        }))
+      : [];
+    const contentType = readResult.content_type === ContentType.Gallery
+      ? ContentType.Gallery
+      : readResult.content_type === ContentType.Image
+        ? ContentType.Image
+        : ContentType.Video;
 
     return {
       url: url,
@@ -293,11 +324,23 @@ export class YtDlpScraper implements IMetadataScraper {
       thumbnailUrl: readResult.thumbnail || undefined,
       performers: performers,
       tags: tags,
-      studio: readResult.uploader || readResult.channel || undefined,
+      studio: isTikTok
+        ? readResult.uploader || readResult.creator || undefined
+        : readResult.uploader || readResult.channel || undefined,
       quality: quality,
       availableQualities: availableQualities.length > 0 ? availableQualities : undefined,
-      contentType: 'video' as ContentType,
+      galleryImages: galleryImages.length > 0 ? galleryImages : undefined,
+      contentType,
     };
+  }
+
+  private isTikTokUrl(url: string): boolean {
+    try {
+      const hostname = new URL(url).hostname.toLowerCase();
+      return hostname === 'tiktok.com' || hostname.endsWith('.tiktok.com');
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -313,8 +356,17 @@ export class YtDlpScraper implements IMetadataScraper {
   /**
    * Extract performers from yt-dlp metadata
    */
-  private extractPerformers(ytdlp: any): string[] {
+  private extractPerformers(ytdlp: any, isTikTok = false): string[] {
     const performers: string[] = [];
+
+    if (isTikTok) {
+      if (typeof ytdlp.uploader === 'string' && ytdlp.uploader) {
+        return [ytdlp.uploader];
+      }
+      if (typeof ytdlp.creator === 'string' && ytdlp.creator) {
+        return [ytdlp.creator];
+      }
+    }
 
     // Try cast first (common for adult sites like Pornhub)
     if (ytdlp.cast && Array.isArray(ytdlp.cast)) {
@@ -336,12 +388,32 @@ export class YtDlpScraper implements IMetadataScraper {
       performers.push(ytdlp.artist);
     }
 
-    // Fallback to uploader if no performers found
-    if (performers.length === 0 && ytdlp.uploader) {
+    // Prefer TikTok's stable account handle, then fall back to its display creator name.
+    if (performers.length === 0 && typeof ytdlp.uploader === 'string') {
       performers.push(ytdlp.uploader);
+    }
+    if (performers.length === 0 && typeof ytdlp.creator === 'string') {
+      performers.push(ytdlp.creator);
     }
 
     // Deduplicate
     return [...new Set(performers)];
+  }
+}
+
+const TIKTOK_PHOTO_URL_RE = /^https?:\/\/(?:www\.)?tiktok\.com\/@[\w.-]+\/photo\/\d+(?:[/?#]|$)/i;
+
+export class TikTokPhotoScraper implements IMetadataScraper {
+  name = 'TikTok Photos';
+  supportedDomains = ['tiktok.com'];
+  contentTypes = [ContentType.Gallery];
+  private readonly scraper = new YtDlpScraper();
+
+  canHandle(url: string): boolean {
+    return TIKTOK_PHOTO_URL_RE.test(url);
+  }
+
+  scrape(url: string): Promise<IScrapedMetadata> {
+    return this.scraper.scrape(url);
   }
 }

@@ -28,10 +28,14 @@ export interface IDownloadOptions {
   onJobStart?: (jobId: string) => void;
   signal?: AbortSignal;
   outputDir?: string;
+  forceOutputDir?: boolean;
   filename?: string;
   quality?: 'best' | '1080p' | '720p' | '480p';
+  forceDirect?: boolean;
   /** Fallback URL for yt-dlp if direct download fails (e.g., original page URL) */
   fallbackUrl?: string;
+  /** 1-based image index for a TikTok photo-post gallery fallback */
+  galleryIndex?: number;
 }
 
 export interface IServerDownloadResult {
@@ -93,12 +97,18 @@ export class DownloadService {
       // Get server download path and proxy from settings
       // Priority: plugin setting > Stash library > default
       const settings = getStorageItem<IPluginSettings>(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
-      const serverDownloadPath = settings.serverDownloadPath || options.outputDir || DEFAULT_SETTINGS.serverDownloadPath;
+      const serverDownloadPath = options.forceOutputDir && options.outputDir
+        ? options.outputDir
+        : settings.serverDownloadPath || options.outputDir || DEFAULT_SETTINGS.serverDownloadPath;
       const httpProxy = settings.httpProxy;
       const ytdlpPath = settings.ytdlpPath;
+      const galleryDlPath = settings.galleryDlPath;
+      const galleryDlDownloadPath = settings.galleryDlDownloadPath;
 
       // Log which path was determined and why (debug only - visible in UI)
-      if (settings.serverDownloadPath) {
+      if (options.forceOutputDir && options.outputDir) {
+        log.debug('Download path (explicitly required for Stash import):', serverDownloadPath);
+      } else if (settings.serverDownloadPath) {
         log.debug('Download path (from plugin settings):', serverDownloadPath);
       } else if (options.outputDir) {
         log.debug('Download path (from Stash library):', serverDownloadPath);
@@ -112,6 +122,9 @@ export class DownloadService {
       if (ytdlpPath) {
         log.debug(`Using custom yt-dlp path: ${ytdlpPath}`);
       }
+      if (galleryDlPath) {
+        log.debug(`Using custom gallery-dl path: ${galleryDlPath}`);
+      }
 
       // Run the download task and wait for completion
       log.info('Starting download task with parameters:', JSON.stringify({
@@ -121,6 +134,8 @@ export class DownloadService {
         quality: options.quality || 'best',
         has_proxy: !!httpProxy,
         has_ytdlp_path: !!ytdlpPath,
+        gallery_dl_executable: galleryDlPath || 'auto-detect',
+        gallery_dl_download_path: galleryDlDownloadPath || `${serverDownloadPath || '<download destination>'}/gallery-dl`,
       }));
 
       // Start progress polling in background. Always runs (even without onProgress)
@@ -192,10 +207,14 @@ export class DownloadService {
             output_dir: serverDownloadPath,
             filename: options.filename,
             quality: options.quality || 'best',
+            force_direct: options.forceDirect,
+            gallery_index: options.galleryIndex,
             result_id: resultId,
             progress_id: progressId, // For real-time progress updates
             proxy: httpProxy,
             ytdlp_path: ytdlpPath, // Custom yt-dlp binary path
+            gallery_dl_path: galleryDlPath,
+            gallery_dl_download_path: galleryDlDownloadPath,
           },
           {
             // Stall-based: stop only if no progress for 5 minutes while running.
@@ -330,6 +349,49 @@ export class DownloadService {
       };
     } catch {
       return { available: false };
+    }
+  }
+
+  /** Check gallery-dl availability and report the resolved executable path. */
+  async checkServerGalleryDl(
+    customPath?: string
+  ): Promise<{
+    available: boolean;
+    version?: string;
+    resolvedPath?: string;
+    resolutionMethod?: string;
+    statusMessage?: string;
+  }> {
+    try {
+      const stashService = getStashService();
+
+      if (!stashService.isStashEnvironment()) {
+        return { available: false };
+      }
+
+      const settings = getStorageItem<IPluginSettings>(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+      const result = await stashService.runPluginOperation(PLUGIN_ID, {
+        mode: 'check_gallery_dl',
+        gallery_dl_path: customPath ?? settings.galleryDlPath,
+      }) as {
+        available?: boolean;
+        version?: string;
+        resolved_path?: string;
+        resolution_method?: string;
+        status_message?: string;
+      } | null;
+
+      return {
+        available: result?.available === true,
+        version: result?.version || undefined,
+        resolvedPath: result?.resolved_path || undefined,
+        resolutionMethod: result?.resolution_method || undefined,
+        statusMessage: result?.status_message || undefined,
+      };
+    } catch (error) {
+      const statusMessage = error instanceof Error ? error.message : String(error);
+      log.warn(`gallery-dl check failed: ${statusMessage}`);
+      return { available: false, statusMessage };
     }
   }
 

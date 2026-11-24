@@ -128,7 +128,9 @@ query GetPluginSettings($include: [ID!]) {
 **MetadataService (ScraperRegistry)**
 - Pluggable scraper architecture with priority ordering
 - **ContentType support**: Scrapers declare supported content types (Video, Image, Gallery)
+- **TikTokPhotoScraper**: Specialized `/@user/photo/{id}` parser that extracts carousel images and uploader metadata without yt-dlp
 - **YtDlpScraper**: PRIMARY - Server-side yt-dlp via Python backend (extracts video URLs)
+- **gallery-dl fallback**: Python backend uses gallery-dl for TikTok metadata and downloads when page parsing or yt-dlp fails
 - **BooruScraper**: Image/gallery scraper for booru sites (Rule34, Gelbooru, Danbooru)
 - **StashScraper**: FALLBACK - Uses Stash's built-in scraper API
 - **GenericScraper**: LAST RESORT - URL parsing only
@@ -137,6 +139,11 @@ query GetPluginSettings($include: [ID!]) {
 
 **Python Backend (scripts/download.py)**
 - Server-side downloads using yt-dlp
+- Optional gallery-dl fallback for TikTok metadata and downloads; detects the Python module or PATH CLI, with optional `galleryDlPath` and `galleryDlDownloadPath` settings
+- Fallback downloads preserve gallery-dl's category/user folder structure inside a dedicated `gallery-dl` subdirectory by default, so Stash scans the downloaded folder instead of the full library root
+- TikTok photo gallery imports use `galleryDlDownloadPath` for both direct CDN image downloads and gallery-dl fallback downloads, without changing yt-dlp's output directory
+- Stash metadata scans receive exact downloaded file paths; gallery imports pass every downloaded image path rather than scanning a containing library directory
+- TikTok gallery image records receive per-image titles, `image_index` source URLs, post dates, and the creator/uploader as performer and studio; standalone TikTok images and their gallery records use the same performer/studio mapping
 - Quality selection (best, 1080p, 720p, 480p)
 - Metadata extraction without downloading
 - **Cover image fetching**: Fetches thumbnail URLs server-side (bypasses browser CSP)
@@ -403,6 +410,7 @@ interface IMetadataScraper {
 // Scrapers registered in priority order
 class ScraperRegistry {
   constructor() {
+    this.register(new TikTokPhotoScraper()); // TikTok photo galleries
     this.register(new YtDlpScraper());    // PRIMARY: Video via yt-dlp
     this.register(new BooruScraper());    // Image/Gallery for booru sites
     this.register(new StashScraper());    // FALLBACK: Stash's built-in scraper
@@ -419,18 +427,20 @@ class ScraperRegistry {
 
 ### Scraper Fallback Chain
 
-1. **YtDlpScraper** - PRIMARY for Video: Server-side yt-dlp via Python backend
+1. **TikTokPhotoScraper** - Specialized for TikTok photo posts: extracts carousel images from embedded page data and maps the uploader/creator to a performer.
+2. **YtDlpScraper** - PRIMARY: Server-side yt-dlp via Python backend
    - Uses `runPluginTask` to extract metadata (saves to temp file)
    - Uses `runPluginOperation` to read result from temp file
    - **yt-dlp resolution**: Python module (`sys.executable -m yt_dlp`) → CLI on PATH → custom `ytdlpPath` setting → auto-install
    - Supports HTTP/SOCKS proxy via `httpProxy` setting (passed to yt-dlp via `--proxy` flag)
    - Extracts best quality video URL from formats array or top-level URL
-2. **BooruScraper** - PRIMARY for Image/Gallery: Booru site API scraper
+   - TikTok fallback: gallery-dl Python module or PATH CLI, with optional `galleryDlPath`; supports TikTok photo-gallery metadata and downloads
+3. **BooruScraper** - PRIMARY for Image/Gallery: Booru site API scraper
    - Supports Rule34, Gelbooru, Danbooru, and other booru sites
    - Extracts tags, source URLs, and high-resolution images
    - Parses booru tag categories (artist, character, copyright, general)
-3. **StashScraper** - FALLBACK: Uses Stash's built-in scraper API
-4. **GenericScraper** - LAST RESORT: Extracts filename from URL
+4. **StashScraper** - FALLBACK: Uses Stash's built-in scraper API
+5. **GenericScraper** - LAST RESORT: URL parsing only
 
 If a scraper throws an error, the registry tries the next one.
 

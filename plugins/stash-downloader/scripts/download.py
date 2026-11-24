@@ -7,7 +7,7 @@ It's invoked via Stash's runPluginTask GraphQL mutation.
 
 Requirements:
 - Python 3.7+
-- yt-dlp (pip install yt-dlp)
+- yt-dlp (pip install "yt-dlp[default,curl-cffi]")
 - requests (pip install requests)
 
 Usage:
@@ -19,16 +19,21 @@ Result Communication:
   a temp file that can be read via the 'read_result' task.
 """
 
+import base64
+import binascii
+import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 # Configure logging
 # Stash shows stderr in its logs. Use INFO by default so messages appear correctly.
@@ -219,6 +224,7 @@ def sanitize_filename(filename: str) -> str:
 
 # Cached yt-dlp command (resolved once, reused for all calls)
 _ytdlp_cmd: Optional[list] = None
+_gallery_dl_cmd: Optional[list] = None
 
 
 def get_ytdlp_cmd(custom_path: Optional[str] = None) -> list:
@@ -276,6 +282,34 @@ def get_ytdlp_cmd(custom_path: Optional[str] = None) -> list:
     return []
 
 
+def get_gallery_dl_cmd(custom_path: Optional[str] = None) -> list:
+    """Resolve gallery-dl from a configured executable, Python module, or PATH."""
+    global _gallery_dl_cmd
+
+    if custom_path:
+        log.info(f"Using custom gallery-dl path from settings: {custom_path}")
+        return [custom_path]
+
+    if _gallery_dl_cmd is not None:
+        return _gallery_dl_cmd
+
+    try:
+        import importlib.util
+        if importlib.util.find_spec("gallery_dl") is not None:
+            _gallery_dl_cmd = [sys.executable, "-m", "gallery_dl"]
+            return _gallery_dl_cmd
+    except (ImportError, ValueError):
+        pass
+
+    gallery_dl_path = shutil.which("gallery-dl")
+    if gallery_dl_path:
+        _gallery_dl_cmd = [gallery_dl_path]
+        return _gallery_dl_cmd
+
+    _gallery_dl_cmd = []
+    return []
+
+
 def install_ytdlp() -> bool:
     """Attempt to install yt-dlp using pip, with fallbacks for restricted environments."""
     global _ytdlp_cmd
@@ -283,10 +317,10 @@ def install_ytdlp() -> bool:
 
     # Try standard pip install first
     install_commands = [
-        [sys.executable, "-m", "pip", "install", "yt-dlp"],
+        [sys.executable, "-m", "pip", "install", "yt-dlp[default,curl-cffi]"],
         # Fallback for externally-managed environments (Docker Alpine, etc.)
-        [sys.executable, "-m", "pip", "install", "--user", "yt-dlp"],
-        [sys.executable, "-m", "pip", "install", "--break-system-packages", "yt-dlp"],
+        [sys.executable, "-m", "pip", "install", "--user", "yt-dlp[default,curl-cffi]"],
+        [sys.executable, "-m", "pip", "install", "--break-system-packages", "yt-dlp[default,curl-cffi]"],
     ]
 
     for cmd in install_commands:
@@ -328,7 +362,7 @@ def check_ytdlp(custom_path: Optional[str] = None) -> bool:
             return True
 
     log.error(
-        "yt-dlp is not installed. Install it with: pip install yt-dlp\n"
+        'yt-dlp is not installed. Install it with: pip install "yt-dlp[default,curl-cffi]"\n'
         "Or set a custom path in plugin settings (ytdlpPath)."
     )
     return False
@@ -403,7 +437,12 @@ def detect_content_type(metadata: dict) -> str:
     return "video"
 
 
-def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional[str] = None) -> dict:
+def extract_metadata(
+    url: str,
+    proxy: Optional[str] = None,
+    ytdlp_path: Optional[str] = None,
+    gallery_dl_path: Optional[str] = None,
+) -> dict:
     """
     Extract metadata using yt-dlp without downloading.
 
@@ -411,10 +450,33 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
         url: URL to extract metadata from
         proxy: Optional HTTP/HTTPS/SOCKS proxy (e.g., http://proxy.example.com:8080)
         ytdlp_path: Optional custom path to yt-dlp binary
+        gallery_dl_path: Optional custom path to gallery-dl binary
 
     Returns:
         dict with metadata on success, or dict with 'extraction_error' key on failure
     """
+    is_tiktok_photo = is_tiktok_photo_url(url)
+    is_tiktok = is_tiktok_url(url)
+    tiktok_photo_error = None
+
+    def try_tiktok_fallback(previous_error: str) -> dict:
+        fallback_metadata, fallback_error = extract_gallery_dl_tiktok_metadata(
+            url, proxy=proxy, gallery_dl_path=gallery_dl_path
+        )
+        if fallback_metadata:
+            return fallback_metadata
+        return {
+            "extraction_error": f"{previous_error}; {fallback_error}",
+            "used_proxy": bool(proxy),
+        }
+
+    if is_tiktok_photo:
+        photo_metadata = extract_tiktok_photo_post(url, proxy=proxy)
+        if "extraction_error" not in photo_metadata:
+            return photo_metadata
+        tiktok_photo_error = photo_metadata["extraction_error"]
+        log.warning("Direct TikTok photo-page parsing failed; trying yt-dlp")
+
     # rule34video: yt-dlp's extractor is broken (see extract_rule34video), so use the
     # built-in page parser first and only fall back to yt-dlp if it returns nothing
     if is_rule34video_url(url):
@@ -424,11 +486,19 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
             return parsed_info
         log.warning("Built-in rule34video parser returned nothing, trying yt-dlp")
 
-    cmd = get_ytdlp_cmd(ytdlp_path) + [
-        "--dump-json",
+    ytdlp_cmd = get_ytdlp_cmd(ytdlp_path)
+    if not ytdlp_cmd:
+        if is_tiktok:
+            previous_error = tiktok_photo_error or "yt-dlp is not installed or accessible"
+            return try_tiktok_fallback(previous_error)
+        return {"extraction_error": "yt-dlp is not installed or accessible", "used_proxy": bool(proxy)}
+
+    cmd = ytdlp_cmd + [
+        "--dump-single-json" if is_tiktok_photo else "--dump-json",
         "--no-download",
-        "--no-playlist",
     ]
+    if not is_tiktok_photo:
+        cmd.append("--no-playlist")
 
     # Add proxy if provided
     if proxy:
@@ -447,7 +517,17 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
 
         if result.returncode == 0 and result.stdout:
             log.info("✓ Metadata extracted")
-            return json.loads(result.stdout)
+            metadata = json.loads(result.stdout)
+            if is_tiktok_photo:
+                gallery_metadata = _normalize_tiktok_gallery_metadata(metadata, url)
+                if gallery_metadata:
+                    return gallery_metadata
+                return try_tiktok_fallback(
+                    f"{tiktok_photo_error}; yt-dlp returned metadata but no carousel image URLs"
+                )
+            if is_tiktok and not metadata.get("url") and not metadata.get("formats"):
+                return try_tiktok_fallback("yt-dlp returned no usable TikTok media URL")
+            return metadata
         else:
             # Enhanced error logging with proxy context
             error_msg = result.stderr or result.stdout or "Unknown error"
@@ -458,6 +538,9 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
                 fallback = extract_rule34video(url, proxy=proxy)
                 if fallback:
                     return fallback
+            if is_tiktok:
+                previous_error = f"{tiktok_photo_error}; yt-dlp fallback failed: {clean_error}" if tiktok_photo_error else f"yt-dlp failed: {clean_error}"
+                return try_tiktok_fallback(previous_error)
             if proxy:
                 log.error(f"yt-dlp extraction FAILED (proxy {proxy}): {error_msg[:200]}")
             else:
@@ -468,15 +551,24 @@ def extract_metadata(url: str, proxy: Optional[str] = None, ytdlp_path: Optional
         if proxy:
             timeout_msg += f" (proxy: {proxy})"
         log.error(f"yt-dlp TIMED OUT: {timeout_msg}")
+        if is_tiktok:
+            previous_error = f"{tiktok_photo_error}; yt-dlp fallback {timeout_msg}" if tiktok_photo_error else f"yt-dlp {timeout_msg}"
+            return try_tiktok_fallback(previous_error)
         return {"extraction_error": timeout_msg, "used_proxy": bool(proxy)}
     except json.JSONDecodeError as e:
         log.error(f"Failed to parse yt-dlp output: {e}", exc_info=True)
+        if is_tiktok:
+            previous_error = f"{tiktok_photo_error}; yt-dlp returned invalid JSON: {e}" if tiktok_photo_error else f"yt-dlp returned invalid JSON: {e}"
+            return try_tiktok_fallback(previous_error)
         return {"extraction_error": f"Failed to parse yt-dlp output: {e}", "used_proxy": bool(proxy)}
     except Exception as e:
         error_msg = f"Extraction error: {e}"
         if proxy:
             error_msg += f" (proxy: {proxy})"
         log.error(error_msg, exc_info=True)
+        if is_tiktok:
+            previous_error = f"{tiktok_photo_error}; yt-dlp fallback failed: {error_msg}" if tiktok_photo_error else f"yt-dlp failed: {error_msg}"
+            return try_tiktok_fallback(previous_error)
         return {"extraction_error": str(e), "used_proxy": bool(proxy)}
 
 
@@ -535,8 +627,414 @@ def is_direct_file_url(url: str) -> bool:
 BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 RULE34VIDEO_URL_RE = re.compile(r"^https?://(?:www\.)?rule34video\.(?:com|party)/videos?/(\d+)", re.IGNORECASE)
+TIKTOK_PHOTO_URL_RE = re.compile(r"^https?://(?:www\.)?tiktok\.com/@[\w.-]+/photo/(\d+)(?:[/?#]|$)", re.IGNORECASE)
+TIKTOK_URL_RE = re.compile(r"^https?://(?:[\w-]+\.)*tiktokv?\.com(?:[:/]|$)", re.IGNORECASE)
 
 QUALITY_MAX_HEIGHT = {"1080p": 1080, "720p": 720, "480p": 480}
+
+
+def is_tiktok_url(url: Optional[str]) -> bool:
+    return bool(url and TIKTOK_URL_RE.match(url))
+
+
+def is_tiktok_photo_url(url: Optional[str]) -> bool:
+    return bool(url and TIKTOK_PHOTO_URL_RE.match(url))
+
+
+def _solve_tiktok_web_challenge(html: str) -> Optional[dict]:
+    class ChallengeElements(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.values = {}
+
+        def handle_starttag(self, tag, attrs):
+            attributes = dict(attrs)
+            element_id = attributes.get("id")
+            if element_id in {"cs", "wci", "rci", "rs"}:
+                self.values[element_id] = attributes.get("class", "")
+
+    parser = ChallengeElements()
+    parser.feed(html)
+    elements = parser.values
+    if not elements.get("cs") or not elements.get("wci"):
+        return None
+
+    try:
+        challenge = json.loads(base64.b64decode(elements["cs"] + "===").decode("utf-8"))
+        expected_digest = base64.b64decode(challenge["v"]["c"] + "===")
+        base_digest = hashlib.sha256(base64.b64decode(challenge["v"]["a"] + "==="))
+        solution = None
+        for value in range(1_000_001):
+            candidate = base_digest.copy()
+            candidate.update(str(value).encode("ascii"))
+            if candidate.digest() == expected_digest:
+                solution = value
+                break
+        if solution is None:
+            return None
+
+        challenge["d"] = base64.b64encode(str(solution).encode("ascii")).decode("ascii")
+        cookie_value = base64.b64encode(
+            json.dumps(challenge, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        cookies = {elements["wci"]: cookie_value}
+        if elements.get("rci") and elements.get("rs"):
+            cookies[elements["rci"]] = elements["rs"]
+        return cookies
+    except (binascii.Error, UnicodeDecodeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _find_tiktok_image_post(value: Any) -> Optional[Tuple[dict, list]]:
+    stack = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key in ("imagePost", "image_post_info", "imagePostInfo", "image_post"):
+                image_post = current.get(key)
+                if isinstance(image_post, dict):
+                    images = image_post.get("images") or image_post.get("image_list") or image_post.get("imageList")
+                    if isinstance(images, list) and images:
+                        return current, images
+            stack.extend(reversed(list(current.values())))
+        elif isinstance(current, list):
+            stack.extend(reversed(current))
+    return None
+
+
+def _tiktok_image_url(image: Any) -> Optional[str]:
+    if not isinstance(image, dict):
+        return None
+
+    direct_url = image.get("url") or image.get("image_url") or image.get("thumbnail")
+    if isinstance(direct_url, str) and direct_url:
+        return f"https:{direct_url}" if direct_url.startswith("//") else direct_url
+
+    for key in (
+        "imageURL", "image_url", "originImage", "origin_image",
+        "displayImage", "display_image", "ownerWatermarkImage", "owner_watermark_image",
+    ):
+        value = image.get(key)
+        if isinstance(value, dict):
+            value = value.get("urlList") or value.get("url_list") or value.get("url")
+        elif isinstance(value, list):
+            value = value[0] if value else None
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if isinstance(value, str) and value:
+            return f"https:{value}" if value.startswith("//") else value
+
+    for key in ("urlList", "url_list"):
+        value = image.get(key)
+        if isinstance(value, list) and value and isinstance(value[0], str):
+            url = value[0]
+            return f"https:{url}" if url.startswith("//") else url
+
+    return None
+
+
+def _normalize_tiktok_gallery_metadata(metadata: Any, page_url: str) -> Optional[dict]:
+    if not isinstance(metadata, dict):
+        return None
+
+    image_entries = metadata.get("gallery_images") or metadata.get("images") or metadata.get("entries")
+    if not isinstance(image_entries, list) or not image_entries:
+        return None
+
+    url_match = TIKTOK_PHOTO_URL_RE.match(page_url)
+    post_id = str(metadata.get("id") or (url_match.group(1) if url_match else "post"))
+    gallery_images = []
+    seen_urls = set()
+    for index, image_entry in enumerate(image_entries, start=1):
+        image_url = image_entry if isinstance(image_entry, str) else _tiktok_image_url(image_entry)
+        if not image_url or not image_url.startswith(("http://", "https://")) or image_url in seen_urls:
+            continue
+        seen_urls.add(image_url)
+
+        extension = os.path.splitext(image_url.split("?", 1)[0].split("#", 1)[0])[1].lower()
+        if extension not in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}:
+            entry_extension = image_entry.get("ext") if isinstance(image_entry, dict) else None
+            extension = f".{entry_extension.lower()}" if isinstance(entry_extension, str) else ".jpg"
+        if extension not in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}:
+            extension = ".jpg"
+
+        image_info = image_entry if isinstance(image_entry, dict) else {}
+        gallery_images.append({
+            "url": image_url,
+            "thumbnail_url": image_info.get("thumbnail") or image_url,
+            "filename": image_info.get("filename") or f"tiktok-{post_id}-{index:02d}{extension}",
+            "width": image_info.get("width"),
+            "height": image_info.get("height"),
+        })
+
+    if not gallery_images:
+        return None
+
+    normalized = dict(metadata)
+    normalized["gallery_images"] = gallery_images
+    normalized["content_type"] = "gallery"
+    normalized["webpage_url"] = normalized.get("webpage_url") or page_url
+    normalized["thumbnail"] = normalized.get("thumbnail") or gallery_images[0]["url"]
+    return normalized
+
+
+def _normalize_gallery_dl_tiktok_metadata(messages: Any, page_url: str) -> Optional[dict]:
+    if not isinstance(messages, list):
+        return None
+
+    post_metadata = {}
+    image_entries = []
+    video_entry = None
+    for message in messages:
+        if not isinstance(message, list) or not message:
+            continue
+        if message[0] == 2 and len(message) > 1 and isinstance(message[1], dict):
+            post_metadata = message[1]
+        elif message[0] == 3 and len(message) > 2 and isinstance(message[2], dict):
+            media_metadata = message[2]
+            media_type = media_metadata.get("type")
+            if media_type == "image" and isinstance(message[1], str):
+                image_entries.append((message[1], media_metadata))
+            elif media_type == "video" and isinstance(message[1], str):
+                video_entry = (message[1], media_metadata)
+
+    if not post_metadata and not image_entries and not video_entry:
+        return None
+
+    author = post_metadata.get("author")
+    if not isinstance(author, dict):
+        author = {}
+    uploader = post_metadata.get("user") or author.get("uniqueId") or author.get("nickname")
+    creator = author.get("nickname") or uploader
+    post_id = str(post_metadata.get("id") or "post")
+    title = post_metadata.get("desc") or post_metadata.get("title")
+
+    if image_entries:
+        gallery_images = []
+        seen_urls = set()
+        for index, (image_url, media_metadata) in enumerate(image_entries, start=1):
+            if not image_url.startswith(("http://", "https://")) or image_url in seen_urls:
+                continue
+            seen_urls.add(image_url)
+            extension = (media_metadata.get("extension") or "jpg").lower().lstrip(".")
+            if extension not in {"jpg", "jpeg", "png", "gif", "webp", "bmp"}:
+                extension = "jpg"
+            gallery_images.append({
+                "url": image_url,
+                "thumbnail_url": image_url,
+                "filename": f"tiktok-{post_id}-{index:02d}.{extension}",
+                "width": media_metadata.get("width"),
+                "height": media_metadata.get("height"),
+            })
+
+        if gallery_images:
+            return {
+                "id": post_metadata.get("id"),
+                "title": title or f"TikTok photo #{post_id}",
+                "description": post_metadata.get("desc"),
+                "uploader": uploader,
+                "creator": creator,
+                "upload_date": post_metadata.get("date"),
+                "thumbnail": gallery_images[0]["url"],
+                "content_type": "gallery",
+                "gallery_images": gallery_images,
+                "webpage_url": page_url,
+            }
+
+    if video_entry:
+        video_url, media_metadata = video_entry
+        return {
+            "id": post_metadata.get("id"),
+            "title": title or media_metadata.get("title"),
+            "description": post_metadata.get("desc"),
+            "uploader": uploader,
+            "creator": creator,
+            "upload_date": post_metadata.get("date"),
+            "duration": media_metadata.get("duration"),
+            "thumbnail": media_metadata.get("image"),
+            "content_type": "video",
+            "url": video_url,
+            "webpage_url": page_url,
+            "width": media_metadata.get("width"),
+            "height": media_metadata.get("height"),
+        }
+
+    return None
+
+
+def extract_gallery_dl_tiktok_metadata(
+    url: str, proxy: Optional[str] = None, gallery_dl_path: Optional[str] = None
+) -> Tuple[Optional[dict], Optional[str]]:
+    """Extract TikTok post metadata and media URLs with gallery-dl."""
+    cmd = get_gallery_dl_cmd(gallery_dl_path).copy()
+    if not cmd:
+        return None, "gallery-dl is not installed; run `python -m pip install gallery-dl` or set galleryDlPath"
+
+    cmd += ["--dump-json", "--no-input", "-o", "output.jsonl=false"]
+    if proxy:
+        cmd.extend(["--proxy", proxy])
+    cmd.append(url)
+
+    log.info("Trying gallery-dl as a TikTok fallback")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    except subprocess.TimeoutExpired:
+        return None, "gallery-dl metadata extraction timed out after 90s"
+    except OSError as error:
+        return None, f"could not start gallery-dl: {error}"
+
+    if result.returncode != 0 or not result.stdout:
+        error = (result.stderr or result.stdout or "no output").strip().splitlines()
+        return None, f"gallery-dl failed: {error[-1][:300] if error else 'no output'}"
+
+    try:
+        messages = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        return None, f"gallery-dl returned invalid JSON: {error}"
+
+    metadata = _normalize_gallery_dl_tiktok_metadata(messages, url)
+    if metadata:
+        log.info("gallery-dl extracted TikTok metadata")
+        return metadata, None
+    return None, "gallery-dl returned no usable TikTok media URLs"
+
+
+def _parse_tiktok_photo_html(html: str, page_url: str) -> Optional[dict]:
+    url_match = TIKTOK_PHOTO_URL_RE.match(page_url)
+    if not url_match:
+        return None
+
+    script_ids = ("__UNIVERSAL_DATA_FOR_REHYDRATION__", "SIGI_STATE")
+    for script_id in script_ids:
+        pattern = re.compile(
+            rf'<script\b[^>]*\bid=["\']{re.escape(script_id)}["\'][^>]*>(.*?)</script\s*>',
+            re.IGNORECASE | re.DOTALL,
+        )
+        for match in pattern.finditer(html):
+            try:
+                page_data = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+
+            found = _find_tiktok_image_post(page_data)
+            if not found:
+                continue
+
+            item, image_entries = found
+            images = []
+            seen_urls = set()
+            post_id = str(item.get("id") or url_match.group(1))
+            for index, image_entry in enumerate(image_entries, start=1):
+                image_url = _tiktok_image_url(image_entry)
+                if not image_url or not image_url.startswith(("http://", "https://")) or image_url in seen_urls:
+                    continue
+                seen_urls.add(image_url)
+
+                image_path = image_url.split("?", 1)[0].split("#", 1)[0]
+                extension = os.path.splitext(image_path)[1].lower()
+                if extension not in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}:
+                    extension = ".jpg"
+
+                image_info = image_entry if isinstance(image_entry, dict) else {}
+                images.append({
+                    "url": image_url,
+                    "thumbnail_url": image_url,
+                    "filename": f"tiktok-{post_id}-{index:02d}{extension}",
+                    "width": image_info.get("imageWidth") or image_info.get("image_width") or image_info.get("width"),
+                    "height": image_info.get("imageHeight") or image_info.get("image_height") or image_info.get("height"),
+                })
+
+            if not images:
+                continue
+
+            author = item.get("author") or item.get("authorInfo") or {}
+            if not isinstance(author, dict):
+                author = {}
+            uploader = author.get("uniqueId") or author.get("unique_id") or author.get("username")
+            creator = author.get("nickname") or author.get("displayName") or author.get("name")
+            create_time = item.get("createTime") or item.get("create_time")
+            upload_date = None
+            if create_time:
+                try:
+                    upload_date = time.strftime("%Y%m%d", time.gmtime(int(create_time)))
+                except (TypeError, ValueError, OverflowError):
+                    pass
+
+            title = item.get("desc") or item.get("description") or item.get("title") or f"TikTok photo {post_id}"
+            return {
+                "id": post_id,
+                "title": title,
+                "description": item.get("desc") or item.get("description") or title,
+                "uploader": uploader,
+                "creator": creator,
+                "upload_date": upload_date,
+                "thumbnail": images[0]["url"],
+                "gallery_images": images,
+                "content_type": "gallery",
+                "webpage_url": page_url,
+                "extractor": "TikTok",
+            }
+
+    return None
+
+
+def extract_tiktok_photo_post(url: str, proxy: Optional[str] = None) -> dict:
+    import requests
+
+    try:
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        session = requests.Session()
+        headers = {
+            "User-Agent": BROWSER_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.tiktok.com/",
+        }
+        response = session.get(
+            url,
+            headers=headers,
+            proxies=proxies,
+            timeout=30,
+        )
+        response.raise_for_status()
+        html = response.text
+        status_code = response.status_code
+        content_type = response.headers.get("Content-Type", "unknown")
+        response.close()
+
+        metadata = _parse_tiktok_photo_html(html, url)
+        if metadata:
+            log.info(f"Extracted {len(metadata['gallery_images'])} TikTok photo(s)")
+            return metadata
+
+        challenge_cookies = _solve_tiktok_web_challenge(html)
+        challenge_detected = bool(re.search(r'\bid=["\'](?:cs|wci)["\']', html, re.IGNORECASE))
+        if challenge_cookies:
+            log.info("TikTok returned a web verification challenge; retrying with its challenge cookies")
+            for name, value in challenge_cookies.items():
+                session.cookies.set(name, value, domain=".tiktok.com", path="/")
+            response = session.get(url, headers=headers, proxies=proxies, timeout=30)
+            response.raise_for_status()
+            metadata = _parse_tiktok_photo_html(response.text, url)
+            status_code = response.status_code
+            content_type = response.headers.get("Content-Type", "unknown")
+            response.close()
+            if metadata:
+                log.info(f"Extracted {len(metadata['gallery_images'])} TikTok photo(s) after challenge retry")
+                return metadata
+
+        if challenge_detected and not challenge_cookies:
+            detail = "TikTok served a verification challenge that could not be solved"
+        else:
+            detail = "TikTok returned no carousel data"
+        return {
+            "extraction_error": (
+                f"{detail} (HTTP {status_code}, content type {content_type})"
+            )
+        }
+    except requests.RequestException as e:
+        log.error(f"TikTok photo extraction failed: {e}")
+        return {"extraction_error": f"TikTok photo extraction failed: {e}"}
 
 
 def is_rule34video_url(url: Optional[str]) -> bool:
@@ -727,8 +1225,10 @@ def download_direct_file(
 
         # Ensure filename has an extension
         if "." not in filename:
-            # Try to determine from Content-Type later, default to .mp4
-            filename += ".mp4"
+            # Keep the media type when a caller supplies a title without an extension.
+            path_extension = os.path.splitext(parsed.path)[1].lower()
+            image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+            filename += path_extension if path_extension in image_extensions else ".mp4"
 
         output_path = os.path.join(output_dir, filename)
 
@@ -961,7 +1461,7 @@ def download_video(
     proxy: Optional[str] = None,
     progress_id: Optional[str] = None,
     ytdlp_path: Optional[str] = None,
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """
     Download video using yt-dlp with real-time progress reporting.
 
@@ -976,7 +1476,7 @@ def download_video(
         ytdlp_path: Optional custom path to yt-dlp binary
 
     Returns:
-        Path to downloaded file, or None if failed
+        Downloaded file path and no error, or None and the yt-dlp failure reason
     """
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
@@ -1055,6 +1555,7 @@ def download_video(
         )
 
         stdout_lines = []  # To capture the final file path
+        error_lines = []
         last_progress_update = 0
         progress_update_interval = 0.5  # Update progress file every 0.5 seconds
 
@@ -1133,6 +1634,7 @@ def download_video(
                                 last_progress_update = current_time
                         elif "ERROR" in line or "error" in line.lower():
                             log.error(f"yt-dlp: {line}")
+                            error_lines.append(line[:400])
 
         log.info(f"Finished reading output: {lines_read} lines, {progress_updates} progress updates")
 
@@ -1153,7 +1655,7 @@ def download_video(
                         "file_path": file_path,
                         "last_updated": time.time(),
                     })
-                return file_path
+                return file_path, None
             else:
                 # Try to find the file in output directory
                 log.warning("Could not determine output path, searching directory...")
@@ -1168,10 +1670,10 @@ def download_video(
                             "file_path": str(newest),
                             "last_updated": time.time(),
                         })
-                    return str(newest)
+                    return str(newest), None
 
         # Failed - update progress with error
-        error_msg = "Download failed"
+        error_msg = "\n".join(error_lines[-3:]) or f"yt-dlp exited with status {process.returncode}"
         if progress_id:
             save_result(f"progress-{progress_id}", {
                 "status": "error",
@@ -1183,7 +1685,7 @@ def download_video(
             log.error(f"yt-dlp download failed (using proxy {proxy})")
         else:
             log.error(f"yt-dlp download failed (no proxy)")
-        return None
+        return None, error_msg
 
     except subprocess.TimeoutExpired:
         timeout_msg = f"Download timed out after 1 hour"
@@ -1192,7 +1694,7 @@ def download_video(
         log.error(timeout_msg)
         if progress_id:
             save_result(f"progress-{progress_id}", {"status": "error", "error": timeout_msg, "last_updated": time.time()})
-        return None
+        return None, timeout_msg
     except Exception as e:
         error_msg = f"Download error: {e}"
         if proxy:
@@ -1200,7 +1702,146 @@ def download_video(
         log.error(error_msg, exc_info=True)
         if progress_id:
             save_result(f"progress-{progress_id}", {"status": "error", "error": str(e), "last_updated": time.time()})
-        return None
+        return None, error_msg
+
+
+def download_with_gallery_dl(
+    url: str,
+    output_dir: str,
+    filename: Optional[str] = None,
+    proxy: Optional[str] = None,
+    progress_id: Optional[str] = None,
+    gallery_index: Optional[int] = None,
+    gallery_dl_path: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Download a TikTok post through gallery-dl, returning one media file."""
+    cmd = get_gallery_dl_cmd(gallery_dl_path).copy()
+    if not cmd:
+        return None, "gallery-dl is not installed; run `python -m pip install gallery-dl` or set galleryDlPath"
+
+    os.makedirs(output_dir, exist_ok=True)
+    if progress_id:
+        save_result(f"progress-{progress_id}", {
+            "status": "starting",
+            "last_updated": time.time(),
+            "message": "Starting gallery-dl fallback",
+        })
+
+    try:
+        with tempfile.TemporaryDirectory(prefix=".gallery-dl-", dir=output_dir) as temp_dir:
+            log_path = os.path.join(temp_dir, "gallery-dl.log")
+            cmd.extend([
+                "--no-input",
+                "--no-mtime",
+                "-d", temp_dir,
+                "-f", "{id}_{num}.{extension}",
+            ])
+            if proxy:
+                cmd.extend(["--proxy", proxy])
+            cmd.append(url)
+            log.info("Trying gallery-dl as a TikTok download fallback")
+
+            started_at = time.time()
+            last_progress_at = 0.0
+            with open(log_path, "w+", encoding="utf-8", errors="replace") as log_file:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                )
+                while process.poll() is None:
+                    now = time.time()
+                    if now - started_at >= 6 * 60 * 60:
+                        process.kill()
+                        process.wait()
+                        raise subprocess.TimeoutExpired(cmd, 6 * 60 * 60)
+
+                    if progress_id and now - last_progress_at >= 10:
+                        downloaded_bytes = 0
+                        for path in Path(temp_dir).rglob("*"):
+                            if path.is_file() and path != Path(log_path) and not path.name.endswith(".part"):
+                                try:
+                                    downloaded_bytes += path.stat().st_size
+                                except OSError:
+                                    continue
+                        save_result(f"progress-{progress_id}", {
+                            "status": "downloading",
+                            "downloaded_bytes": downloaded_bytes,
+                            "total_bytes": 0,
+                            "percentage": 0,
+                            "last_updated": now,
+                            "message": "Downloading with gallery-dl",
+                        })
+                        last_progress_at = now
+                    time.sleep(1)
+
+                log_file.flush()
+                log_file.seek(0)
+                output = log_file.read()
+
+            if process.returncode != 0:
+                error_lines = [line for line in output.splitlines() if line.strip()]
+                error_detail = error_lines[-1] if error_lines else f"gallery-dl exited with status {process.returncode}"
+                error_detail = re.sub(r"https?://\S+", "[URL]", error_detail)[:300]
+                return None, error_detail
+
+            files = sorted(
+                (
+                    path for path in Path(temp_dir).rglob("*")
+                    if path.is_file() and path != Path(log_path) and not path.name.endswith(".part")
+                ),
+                key=lambda path: (
+                    0,
+                    int(re.search(r"_(\d+)$", path.stem).group(1)),
+                    path.name,
+                ) if re.search(r"_(\d+)$", path.stem) else (1, 0, path.name),
+            )
+            if not files:
+                return None, "gallery-dl completed without downloading a media file"
+
+            try:
+                selected_index = int(gallery_index or 1)
+            except (TypeError, ValueError):
+                return None, "Invalid gallery image index"
+            if selected_index < 1:
+                return None, "Gallery image index must be 1 or greater"
+            if selected_index > len(files):
+                return None, f"gallery-dl returned {len(files)} media file(s), not image {selected_index}"
+            selected_file = files[selected_index - 1]
+
+            safe_filename = sanitize_filename(filename) if filename else ""
+            if safe_filename:
+                final_name = safe_filename
+                if not os.path.splitext(final_name)[1]:
+                    final_name += selected_file.suffix
+            else:
+                final_name = selected_file.name
+            relative_directory = selected_file.relative_to(temp_dir).parent
+            final_directory = os.path.join(output_dir, str(relative_directory))
+            os.makedirs(final_directory, exist_ok=True)
+            final_path = os.path.join(final_directory, final_name)
+            shutil.move(str(selected_file), final_path)
+
+            if progress_id:
+                save_result(f"progress-{progress_id}", {
+                    "status": "complete",
+                    "percentage": 100,
+                    "downloaded_bytes": os.path.getsize(final_path),
+                    "file_path": final_path,
+                    "last_updated": time.time(),
+                })
+            log.info(f"gallery-dl download complete: {os.path.basename(final_path)}")
+            return final_path, None
+    except subprocess.TimeoutExpired:
+        error = "gallery-dl download timed out after 6 hours"
+        if progress_id:
+            save_result(f"progress-{progress_id}", {"status": "error", "error": error, "last_updated": time.time()})
+        return None, error
+    except OSError as error:
+        message = f"Could not run gallery-dl: {error}"
+        if progress_id:
+            save_result(f"progress-{progress_id}", {"status": "error", "error": message, "last_updated": time.time()})
+        return None, message
 
 
 def task_download(args: dict) -> dict:
@@ -1209,13 +1850,16 @@ def task_download(args: dict) -> dict:
 
     Args:
         url: URL to download (may be direct file URL or page URL)
-        fallback_url: Original page URL for yt-dlp fallback (if url is direct file)
+        fallback_url: Original page URL for site-specific fallback (if url is direct file)
         output_dir: Directory to save file (defaults to /data/StashDownloader)
         filename: Optional custom filename
         quality: Quality preference (best, 1080p, 720p, 480p)
         proxy: Optional HTTP/HTTPS/SOCKS proxy (e.g., http://proxy.example.com:8080)
+        gallery_dl_path: Optional custom path to gallery-dl binary
+        gallery_dl_download_path: Optional directory for gallery-dl fallback files
         result_id: Optional ID for storing result (for async retrieval)
         progress_id: Optional ID for progress updates (frontend can poll this)
+        gallery_index: Optional 1-based image index for TikTok photo-post fallback
 
     Returns:
         Dict with file_path on success, error on failure.
@@ -1230,6 +1874,10 @@ def task_download(args: dict) -> dict:
     quality = args.get("quality", "best")
     proxy = args.get("proxy")  # Optional proxy for bypassing restrictions
     ytdlp_path = args.get("ytdlp_path")  # Optional custom path to yt-dlp binary
+    gallery_dl_path = args.get("gallery_dl_path")
+    gallery_dl_download_path = args.get("gallery_dl_download_path")
+    gallery_index = args.get("gallery_index")
+    force_direct = bool(args.get("force_direct"))
     result_id = args.get("result_id")
     progress_id = args.get("progress_id")  # For real-time progress updates
 
@@ -1250,13 +1898,19 @@ def task_download(args: dict) -> dict:
             save_result(result_id, result)
         return result
 
+    gallery_output_dir = gallery_dl_download_path or os.path.join(output_dir, "gallery-dl")
+    is_tiktok_photo_import = force_direct and is_tiktok_photo_url(fallback_url)
+    direct_output_dir = gallery_output_dir if is_tiktok_photo_import else output_dir
+
     # Track which URL to use for yt-dlp fallback
     ytdlp_url = url
 
     # Check if this is a direct file URL (try direct download first, fallback to yt-dlp)
-    if is_direct_file_url(url):
+    if force_direct or is_direct_file_url(url):
         log.info(f"Detected direct file URL, trying direct download first")
-        file_path = download_direct_file(url, output_dir, filename, proxy=proxy, progress_id=progress_id)
+        if is_tiktok_photo_import:
+            log.info(f"Saving TikTok photo image to gallery-dl download directory: {direct_output_dir}")
+        file_path = download_direct_file(url, direct_output_dir, filename, proxy=proxy, progress_id=progress_id)
 
         if file_path:
             file_size = os.path.getsize(file_path)
@@ -1266,6 +1920,37 @@ def task_download(args: dict) -> dict:
                 log.debug(f"Direct download result saved with result_id: {result_id}")
             return result
         else:
+            if force_direct:
+                if is_tiktok_photo_url(fallback_url):
+                    gallery_file, gallery_error = download_with_gallery_dl(
+                        fallback_url,
+                        gallery_output_dir,
+                        filename=filename,
+                        proxy=proxy,
+                        progress_id=progress_id,
+                        gallery_index=gallery_index,
+                        gallery_dl_path=gallery_dl_path,
+                    )
+                    if gallery_file:
+                        result = {
+                            "file_path": gallery_file,
+                            "file_size": os.path.getsize(gallery_file),
+                            "success": True,
+                        }
+                        if result_id:
+                            save_result(result_id, result)
+                        return result
+                    result = {
+                        "result_error": f"Direct image download failed; gallery-dl fallback failed: {gallery_error}",
+                        "success": False,
+                    }
+                    if result_id:
+                        save_result(result_id, result)
+                    return result
+                result = {"result_error": "Direct image download failed", "success": False}
+                if result_id:
+                    save_result(result_id, result)
+                return result
             # Direct download failed (likely 403/hotlink protection)
             # Fall back to yt-dlp with the original page URL (if provided)
             if fallback_url:
@@ -1288,9 +1973,12 @@ def task_download(args: dict) -> dict:
                 return result
             log.warning("rule34video direct download failed, trying yt-dlp")
 
-    # Check yt-dlp availability
-    if not check_ytdlp(ytdlp_path):
-        result = {"result_error": "yt-dlp is not installed or not accessible. Install with: pip install yt-dlp (or set ytdlpPath in plugin settings)", "success": False}
+    is_tiktok_download = is_tiktok_url(ytdlp_url)
+    # Keep yt-dlp's existing auto-install behavior for other sites. TikTok can
+    # proceed directly to gallery-dl when yt-dlp is unavailable.
+    ytdlp_available = bool(get_ytdlp_cmd(ytdlp_path)) if is_tiktok_download else check_ytdlp(ytdlp_path)
+    if not ytdlp_available and not is_tiktok_download:
+        result = {"result_error": 'yt-dlp is not installed or not accessible. Install with: pip install "yt-dlp[default,curl-cffi]" (or set ytdlpPath in plugin settings)', "success": False}
         if result_id:
             save_result(result_id, result)
         return result
@@ -1305,7 +1993,13 @@ def task_download(args: dict) -> dict:
 
     # Download using yt-dlp (with proxy if provided)
     # Use ytdlp_url which may be the original page URL if direct download failed
-    file_path = download_video(ytdlp_url, output_dir, template, quality, proxy=proxy, progress_id=progress_id, ytdlp_path=ytdlp_path)
+    if ytdlp_available:
+        file_path, download_error = download_video(
+            ytdlp_url, output_dir, template, quality,
+            proxy=proxy, progress_id=progress_id, ytdlp_path=ytdlp_path,
+        )
+    else:
+        file_path, download_error = None, "yt-dlp is not installed or accessible"
 
     if file_path:
         file_size = os.path.getsize(file_path)
@@ -1315,11 +2009,37 @@ def task_download(args: dict) -> dict:
             save_result(result_id, result)
             log.debug(f"Download result saved with result_id: {result_id}")
         return result
-    else:
-        result = {"result_error": "Download failed", "success": False}
-        if result_id:
-            save_result(result_id, result)
-        return result
+
+    error_msg = download_error or "Download failed"
+    if is_tiktok_download:
+        gallery_file, gallery_error = download_with_gallery_dl(
+            ytdlp_url,
+            gallery_output_dir,
+            filename=filename,
+            proxy=proxy,
+            progress_id=progress_id,
+            gallery_index=gallery_index,
+            gallery_dl_path=gallery_dl_path,
+        )
+        if gallery_file:
+            result = {
+                "file_path": gallery_file,
+                "file_size": os.path.getsize(gallery_file),
+                "success": True,
+            }
+            if result_id:
+                save_result(result_id, result)
+            return result
+        error_msg += f"; gallery-dl fallback failed: {gallery_error}"
+        if ytdlp_path:
+            error_msg += " Update the configured yt-dlp binary and ensure curl-cffi is installed in its Python environment."
+        else:
+            error_msg += ' Update yt-dlp on the Stash server with: pip install -U "yt-dlp[default,curl-cffi]".'
+
+    result = {"result_error": error_msg, "success": False}
+    if result_id:
+        save_result(result_id, result)
+    return result
 
 
 def task_extract_metadata(args: dict) -> dict:
@@ -1330,6 +2050,7 @@ def task_extract_metadata(args: dict) -> dict:
         url: URL to extract metadata from
         proxy: Optional HTTP/HTTPS/SOCKS proxy (e.g., http://proxy.example.com:8080)
         result_id: Optional ID for storing result (for async retrieval)
+        gallery_dl_path: Optional custom path to gallery-dl binary
 
     Returns:
         Dict with metadata on success, error on failure.
@@ -1338,6 +2059,7 @@ def task_extract_metadata(args: dict) -> dict:
     url = args.get("url")
     proxy = args.get("proxy")  # Optional proxy for bypassing restrictions
     ytdlp_path = args.get("ytdlp_path")  # Optional custom path to yt-dlp binary
+    gallery_dl_path = args.get("gallery_dl_path")
     result_id = args.get("result_id")
 
     # Log proxy configuration for troubleshooting
@@ -1352,13 +2074,18 @@ def task_extract_metadata(args: dict) -> dict:
             save_result(result_id, result)
         return result
 
-    if not check_ytdlp(ytdlp_path):
-        result = {"result_error": "yt-dlp is not installed. Install with: pip install yt-dlp (or set ytdlpPath in plugin settings)", "success": False}
+    if not is_tiktok_url(url) and not check_ytdlp(ytdlp_path):
+        result = {"result_error": 'yt-dlp is not installed. Install with: pip install "yt-dlp[default,curl-cffi]" (or set ytdlpPath in plugin settings)', "success": False}
         if result_id:
             save_result(result_id, result)
         return result
 
-    metadata = extract_metadata(url, proxy=proxy, ytdlp_path=ytdlp_path)
+    metadata = extract_metadata(
+        url,
+        proxy=proxy,
+        ytdlp_path=ytdlp_path,
+        gallery_dl_path=gallery_dl_path,
+    )
 
     # Check if extraction returned an error
     if "extraction_error" in metadata:
@@ -1415,9 +2142,12 @@ def task_extract_metadata(args: dict) -> dict:
             "description": metadata.get("description"),
             "duration": metadata.get("duration"),
             "uploader": metadata.get("uploader"),
+            "creator": metadata.get("creator"),
             "channel": metadata.get("channel"),  # Channel name (fallback for studio)
             "upload_date": metadata.get("upload_date"),
             "thumbnail": metadata.get("thumbnail"),
+            "content_type": metadata.get("content_type", "video"),
+            "gallery_images": metadata.get("gallery_images", []),
             # Tags and categories (site-specific, may be empty)
             "tags": metadata.get("tags", []),  # List of tags
             "categories": metadata.get("categories", []),  # List of categories
@@ -1439,7 +2169,7 @@ def task_extract_metadata(args: dict) -> dict:
         log.debug(f"Extracted {len(formats_list)} video formats from yt-dlp output")
         if result.get("url"):
             log.debug(f"Top-level URL available: {result['url'][:100]}...")
-        else:
+        elif result.get("content_type") != "gallery":
             log.warning("No top-level URL found in yt-dlp output")
 
     # Save result for async retrieval if result_id provided
@@ -1559,7 +2289,7 @@ def task_check_ytdlp(args: dict) -> dict:
             "available": False,
             "success": True,
             "version": None,
-            "status_message": "yt-dlp not installed. Install with: pip install yt-dlp",
+            "status_message": 'yt-dlp not installed. Install with: pip install "yt-dlp[default,curl-cffi]"',
             "resolution_method": None,
         }
 
@@ -1586,6 +2316,68 @@ def task_check_ytdlp(args: dict) -> dict:
     except subprocess.TimeoutExpired:
         log.error("yt-dlp version check timed out")
         return {"available": False, "success": True, "version": None, "status_message": "yt-dlp check timed out"}
+
+
+def task_check_gallery_dl(args: dict) -> dict:
+    """Check gallery-dl availability, version, and how its executable was resolved."""
+    custom_path = args.get("gallery_dl_path")
+    cmd = get_gallery_dl_cmd(custom_path)
+    if not cmd:
+        return {
+            "available": False,
+            "success": True,
+            "version": None,
+            "resolved_path": None,
+            "resolution_method": None,
+            "status_message": "gallery-dl not found in the Stash Python environment or PATH",
+        }
+
+    if custom_path:
+        resolved_path = custom_path
+        method = "custom path"
+    elif cmd[0] == sys.executable:
+        resolved_path = f"{sys.executable} -m gallery_dl"
+        method = "Python module"
+    else:
+        resolved_path = cmd[0]
+        method = "CLI on PATH"
+
+    try:
+        result = subprocess.run(cmd + ["--version"], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            return {
+                "available": True,
+                "success": True,
+                "version": result.stdout.strip(),
+                "resolved_path": resolved_path,
+                "resolution_method": method,
+            }
+        return {
+            "available": False,
+            "success": True,
+            "version": None,
+            "resolved_path": resolved_path,
+            "resolution_method": method,
+            "status_message": (result.stderr or result.stdout or "gallery-dl version check failed").strip()[-300:],
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "available": False,
+            "success": True,
+            "version": None,
+            "resolved_path": resolved_path,
+            "resolution_method": method,
+            "status_message": "gallery-dl version check timed out",
+        }
+    except OSError as error:
+        return {
+            "available": False,
+            "success": True,
+            "version": None,
+            "resolved_path": resolved_path,
+            "resolution_method": method,
+            "status_message": f"Could not run gallery-dl: {error}",
+        }
 
 
 def task_test_proxy(args: dict) -> dict:
@@ -1769,6 +2561,7 @@ def main():
             "read_result": task_read_result,
             "cleanup_result": task_cleanup_result,
             "check_ytdlp": task_check_ytdlp,
+            "check_gallery_dl": task_check_gallery_dl,
             "test_proxy": task_test_proxy,
             "fetch_image": task_fetch_image,
         }

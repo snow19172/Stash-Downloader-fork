@@ -50,7 +50,8 @@ Download videos and images directly to your Stash library with automatic metadat
 ### Features
 
 - **URL-based Downloads** - Paste URLs to download videos and images
-- **Automatic Metadata** - Extracts titles, thumbnails, performers, tags, studio via yt-dlp
+- **Automatic Metadata** - Extracts titles, thumbnails, performers, tags, studio via yt-dlp; gallery-dl is an optional TikTok fallback
+- **TikTok Photo Galleries** - Imports per-image titles, image-index source URLs and dates; creator/uploader is linked as performer and studio
 - **Editable Metadata** - Review and edit performers, tags, studio before import
 - **Cover Images** - Scraped thumbnails automatically set as scene covers
 - **Browser Extension** - Right-click any link to send directly to your queue
@@ -64,7 +65,7 @@ Download videos and images directly to your Stash library with automatic metadat
 ### Requirements
 
 - Stash v0.20+
-- Python 3.7+ with yt-dlp (`pip install yt-dlp`)
+- Python 3.7+ with yt-dlp; TikTok works best with current yt-dlp plus `curl-cffi`, with optional gallery-dl fallback (`python -m pip install gallery-dl`)
 
 ### Quick Start
 
@@ -81,6 +82,8 @@ Configure in Stash at **Settings** → **Plugins** → **Stash Downloader**:
 |---------|-------------|
 | **Server Download Path** | Where to save files (default: `/data/StashDownloader`) |
 | **HTTP Proxy** | Proxy for geo-restricted content (`http://`, `socks5://`) |
+| **yt-dlp Path / gallery-dl Path** | Optional custom executable paths; gallery-dl is used as a TikTok fallback |
+| **gallery-dl Download Path** | Optional dedicated folder for fallback downloads; leave empty to use a `gallery-dl` subfolder. Keep it inside the relevant Stash library for imports |
 | **Concurrent Downloads** | Max simultaneous downloads (default: 3) |
 | **Download Quality** | Preferred video quality |
 
@@ -211,12 +214,13 @@ See [Development Guide](docs/DEVELOPMENT.md) for architecture details.
 
 **yt-dlp not working?**
 ```bash
-pip install -U yt-dlp  # Update to latest
+pip install -U "yt-dlp[default,curl-cffi]"  # Update yt-dlp and install TikTok request impersonation support
 ```
 
 **Docker users:**
 ```bash
-docker exec -it stash pip install -U yt-dlp --break-system-packages
+docker exec -it stash pip install -U --break-system-packages "yt-dlp[default,curl-cffi]"
+docker exec -it stash pip install --break-system-packages gallery-dl
 ```
 
 **Autocomplete not showing results?**

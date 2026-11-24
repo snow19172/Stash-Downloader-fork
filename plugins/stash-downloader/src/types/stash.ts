@@ -70,6 +70,8 @@ export interface IStashSceneFile {
 export interface IStashImage {
   id: string;
   title?: string;
+  url?: string;
+  date?: string;
   rating100?: number;
   organized: boolean;
   created_at: string;
@@ -135,6 +137,14 @@ export interface IImageCreateInput {
   tag_ids?: string[];
   studio_id?: string;
   file_ids?: string[];
+}
+
+export interface IImageUpdateInput {
+  title?: string;
+  url?: string;
+  date?: string;
+  performer_ids?: string[];
+  studio_id?: string;
 }
 
 export interface IGalleryCreateInput {

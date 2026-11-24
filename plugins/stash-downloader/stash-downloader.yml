@@ -1,7 +1,7 @@
 name: Stash Downloader
 description: Download images and videos from URLs with automatic metadata extraction and organization
-version: 0.1.0
-url: https://github.com/Codename-11/Stash-Downloader
+version: 0.5.3-fork
+url: https://github.com/snow19172/Stash-Downloader-fork
 settings:
   serverDownloadPath:
     displayName: Download Path
@@ -10,6 +10,14 @@ settings:
   ytdlpPath:
     displayName: yt-dlp Path
     description: "Custom path to yt-dlp binary. Leave empty for auto-detection (tries Python module first, then PATH). Examples: /usr/local/bin/yt-dlp, C:\\tools\\yt-dlp.exe"
+    type: STRING
+  galleryDlPath:
+    displayName: gallery-dl Path
+    description: "Custom path to gallery-dl binary for TikTok metadata and download fallback. Leave empty for auto-detection (Python module first, then PATH)."
+    type: STRING
+  galleryDlDownloadPath:
+    displayName: gallery-dl Download Path
+    description: "Absolute directory for gallery-dl fallback downloads. Leave empty to use a gallery-dl subfolder under the normal download destination. For Stash imports, set this inside the relevant Stash library."
     type: STRING
   httpProxy:
     displayName: HTTP Proxy
@@ -71,6 +79,10 @@ tasks:
     description: Check if yt-dlp is installed and available
     defaultArgs:
       mode: check_ytdlp
+  - name: Check gallery-dl
+    description: Check if gallery-dl is installed and available
+    defaultArgs:
+      mode: check_gallery_dl
   - name: Test Proxy
     description: Test proxy connectivity by fetching a URL
     defaultArgs:

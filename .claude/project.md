@@ -43,7 +43,7 @@ JavaScript Extension / Web-UI Plugin for Stash
 3. **Content Type Support**
    - **Video**: Via YtDlpScraper (primary), supports most video sites
    - **Image**: Via BooruScraper for booru sites (Rule34, Gelbooru, Danbooru)
-   - **Gallery**: Multiple images from a single URL (booru pools, etc.)
+   - **Gallery**: TikTok photo posts and booru pools; TikTok uploader is imported as a performer, with creator name as fallback
    - Content type selector in URL input form
 
 4. **Stash Integration**
@@ -151,7 +151,7 @@ The plugin auto-detects yt-dlp in this order:
 1. **Custom path** from plugin settings (`ytdlpPath`)
 2. **Python module**: `python -m yt_dlp` (same Python env as Stash - no PATH needed)
 3. **CLI binary**: `yt-dlp` on system PATH (legacy fallback)
-4. **Auto-install**: Attempts `pip install yt-dlp` if not found
+4. **Auto-install**: Attempts `pip install "yt-dlp[default,curl-cffi]"` if not found
 
 If yt-dlp is installed but not detected (common in Docker/service setups):
 - Set the **yt-dlp Path** setting in Stash → Settings → Plugins → Stash Downloader
@@ -161,29 +161,40 @@ The Server Config panel in the plugin UI shows which detection method found yt-d
 
 **Install yt-dlp (standard):**
 ```bash
-pip install yt-dlp
+pip install "yt-dlp[default,curl-cffi]"
 # Verify with Python module (no PATH needed):
 python -m yt_dlp --version
 ```
 
 **Install yt-dlp (Docker - Alpine-based Stash image):**
 ```bash
-docker exec -it stash pip install yt-dlp --break-system-packages
+docker exec -it stash pip install --break-system-packages "yt-dlp[default,curl-cffi]"
 # Verify:
 docker exec -it stash python -m yt_dlp --version
 ```
 
-Note: Lost on container recreation. For persistence, use custom Dockerfile with `RUN pip install yt-dlp --break-system-packages`.
+Note: Lost on container recreation. For persistence, use custom Dockerfile with `RUN pip install --break-system-packages "yt-dlp[default,curl-cffi]"`.
 
 ### yt-dlp Extraction Failures
 If scraping fails with errors like "No video formats found" or "Failed to extract metadata", yt-dlp likely needs updating. Site extractors break frequently as sites change their structure.
 
 **Update yt-dlp:**
 ```bash
-pip install -U yt-dlp
+pip install -U "yt-dlp[default,curl-cffi]"
 # Docker:
-docker exec -it stash pip install -U yt-dlp --break-system-packages
+docker exec -it stash pip install -U --break-system-packages "yt-dlp[default,curl-cffi]"
 ```
+
+### TikTok gallery-dl Fallback
+For TikTok metadata or downloads that still fail with yt-dlp, the backend can use gallery-dl as a fallback:
+
+```bash
+python -m pip install gallery-dl
+# Docker:
+docker exec -it stash pip install --break-system-packages gallery-dl
+```
+
+The backend auto-detects the gallery-dl Python module or CLI on PATH. The Server Configuration panel shows its detected version and executable path. If Stash runs it in a different environment, set **gallery-dl Path** in the plugin settings. Fallback downloads go to a dedicated `gallery-dl` subdirectory under the normal download destination by default, preserving gallery-dl's category/user folder structure. TikTok photo gallery imports also save direct image downloads to the configured **gallery-dl Download Path** (or the default `gallery-dl` subdirectory) instead of the first image library path. Scans are restricted to the exact downloaded files; gallery imports pass all downloaded images together. Each TikTok gallery image gets an individual title, an `image_index` source URL, the post date, and the creator/uploader as performer and studio; the gallery and standalone TikTok images use the same performer/studio mapping. Keep the configured download directory inside the appropriate Stash library for imports. TikTok photo-post gallery imports retry an image through gallery-dl using that post's original URL and image index.
 
 ### Common Site-Specific Issues
 - **XHamster**: Extractor updates frequently needed (check [yt-dlp issues](https://github.com/yt-dlp/yt-dlp/issues))

@@ -32,7 +32,9 @@
 2. Verify yt-dlp is installed: `yt-dlp --version`
 3. Some sites block automated downloads
 4. Check if proxy is needed for geo-restricted content
-5. Try updating yt-dlp: `pip install -U yt-dlp`
+5. Try updating yt-dlp: `pip install -U "yt-dlp[default,curl-cffi]"`
+
+For TikTok, update yt-dlp and install its `curl-cffi` extra. The plugin now includes yt-dlp's specific error in the download failure message; if a configured custom yt-dlp path is used, update that binary and install `curl-cffi` in its Python environment.
 
 ### Import to Stash fails
 
@@ -52,12 +54,12 @@ Site extractors break frequently. Update yt-dlp:
 
 ```bash
 # Standard
-pip install -U yt-dlp
+pip install -U "yt-dlp[default,curl-cffi]"
 # or
 yt-dlp -U
 
 # Docker
-docker exec -it stash pip install -U yt-dlp --break-system-packages
+docker exec -it stash pip install -U --break-system-packages "yt-dlp[default,curl-cffi]"
 ```
 
 Check [yt-dlp issues](https://github.com/yt-dlp/yt-dlp/issues) for site-specific problems.
@@ -65,7 +67,7 @@ Check [yt-dlp issues](https://github.com/yt-dlp/yt-dlp/issues) for site-specific
 ### yt-dlp not found
 
 1. Ensure Python 3.7+ is installed: `python3 --version`
-2. Install yt-dlp: `pip install yt-dlp`
+2. Install yt-dlp: `pip install "yt-dlp[default,curl-cffi]"`
 3. Verify it works: `yt-dlp --version`
 4. Check Stash logs for path errors
 
@@ -75,7 +77,7 @@ The official Stash Docker image is Alpine-based:
 
 ```bash
 # Install (replace 'stash' with your container name)
-docker exec -it stash pip install -U yt-dlp --break-system-packages
+docker exec -it stash pip install -U --break-system-packages "yt-dlp[default,curl-cffi]"
 
 # Verify
 docker exec -it stash yt-dlp --version
@@ -85,7 +87,7 @@ docker exec -it stash yt-dlp --version
 
 ```dockerfile
 FROM stashapp/stash:latest
-RUN pip install -U yt-dlp --break-system-packages
+RUN pip install -U --break-system-packages "yt-dlp[default,curl-cffi]"
 ```
 
 ---

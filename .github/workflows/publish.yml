@@ -672,7 +672,7 @@ jobs:
 
           ### 📋 Requirements
           - Stash v0.20+
-          - Python 3.7+ with yt-dlp (\`pip install yt-dlp\`)
+          - Python 3.7+ with yt-dlp; TikTok requires current yt-dlp with curl-cffi (\`pip install -U "yt-dlp[default,curl-cffi]"\`)
 
           Rules:
           - Be concise - one line per feature

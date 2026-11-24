@@ -6,6 +6,7 @@ import type {
   IDownloadItem,
   IStashScene,
   IStashImage,
+  IStashGallery,
   IStashPerformer,
   IStashTag,
   IStashStudio,
@@ -21,6 +22,46 @@ import { createLogger } from '@/utils';
 import { PLUGIN_ID } from '@/constants';
 
 const log = createLogger('StashImport');
+
+interface IImportCallbacks {
+  onProgress?: (progress: IDownloadProgress) => void;
+  onStatusChange?: (status: string) => void;
+  onLog?: (level: IItemLogEntry['level'], message: string, details?: string) => void;
+  onJobStart?: (jobId: string) => void;
+}
+
+function getTikTokPhotoImageMetadata(pageUrl: string, index: number): { title: string; url: string } | undefined {
+  try {
+    const url = new URL(pageUrl);
+    const hostname = url.hostname.toLowerCase();
+    const pathMatch = url.pathname.match(/^\/@[^/]+\/photo\/(\d+)\/?$/i);
+    if (
+      (hostname !== 'tiktok.com' && !hostname.endsWith('.tiktok.com')) ||
+      !pathMatch
+    ) {
+      return undefined;
+    }
+
+    url.search = '';
+    url.searchParams.set('image_index', String(index));
+    url.hash = '';
+    return {
+      title: `${pathMatch[1]}-${String(index).padStart(2, '0')}`,
+      url: url.toString(),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function getTikTokPhotoImageIndex(pageUrl: string): number {
+  try {
+    const index = Number(new URL(pageUrl).searchParams.get('image_index'));
+    return Number.isInteger(index) && index > 0 ? index : 1;
+  } catch {
+    return 1;
+  }
+}
 
 export class StashImportService {
   private stashService = getStashService();
@@ -41,19 +82,14 @@ export class StashImportService {
    */
   async importToStash(
     item: IDownloadItem,
-    callbacks?: {
-      onProgress?: (progress: IDownloadProgress) => void;
-      onStatusChange?: (status: string) => void;
-      onLog?: (level: IItemLogEntry['level'], message: string, details?: string) => void;
-      /** Called when the Stash job starts, with the jobId for potential cancellation */
-      onJobStart?: (jobId: string) => void;
-    }
-  ): Promise<IStashScene | IStashImage> {
+    callbacks?: IImportCallbacks
+  ): Promise<IStashScene | IStashImage | IStashGallery> {
     const { onProgress, onStatusChange, onLog, onJobStart } = callbacks || {};
     if (!item.editedMetadata) {
       throw new Error('Item must have edited metadata before import');
     }
 
+    const contentType = item.metadata?.contentType || ContentType.Video;
     const itemTitle = item.editedMetadata?.title || item.metadata?.title || item.url;
     log.info('Starting import for:', JSON.stringify({
       url: item.url,
@@ -64,19 +100,25 @@ export class StashImportService {
 
     if (onLog) onLog('info', `Starting import for: ${itemTitle}`);
 
+    if (contentType === ContentType.Gallery) {
+      return this.importGallery(item, callbacks);
+    }
+
     // Determine which URL to download from
-    // For yt-dlp sites, always use the original page URL (yt-dlp handles finding the video)
-    // For other sites, use direct video URL if available
+    // For yt-dlp sites, use the original page URL; extracted media URLs may expire or reject generic requests.
     let downloadUrl = item.url;
+    let isYtDlpSite = false;
 
     // Only use videoUrl if it's a valid absolute URL and we're not using yt-dlp
     if (item.metadata?.videoUrl) {
       try {
         const videoUrlObj = new URL(item.metadata.videoUrl);
-        // If it's a valid absolute URL and not from a yt-dlp site, use it
-        const isYtDlpSite = ['youporn.com', 'pornhub.com', 'www.pornhub.com', 'www.youporn.com'].some(domain =>
-          item.url.toLowerCase().includes(domain)
+        const hostname = new URL(item.url).hostname.toLowerCase();
+        isYtDlpSite = ['youporn.com', 'pornhub.com', 'tiktok.com'].some(domain =>
+          hostname === domain || hostname.endsWith(`.${domain}`)
         );
+
+        // If it's a valid absolute URL and not from a yt-dlp site, use it
         if (!isYtDlpSite) {
           downloadUrl = videoUrlObj.href;
           log.debug('Using direct video URL:', downloadUrl);
@@ -134,7 +176,7 @@ export class StashImportService {
       },
       fallbackUrl, // Original page URL for yt-dlp if direct download fails
       filename: downloadFilename, // Use scraped title as filename
-    });
+    }, isYtDlpSite ? undefined : item.metadata?.videoUrl, item.metadata?.imageUrl, contentType);
 
     // Check if this was a server-side download (file already on disk)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Custom properties added to Blob for server download info
@@ -360,19 +402,24 @@ export class StashImportService {
     // Get or create performers, tags, studio
     if (onStatusChange) onStatusChange('Resolving metadata...');
     if (onLog) onLog('info', 'Resolving performers, tags, and studio...');
-    const performerIds = await this.resolvePerformers(
-      item.editedMetadata.performers || []
-    );
+    const performerIds = item.editedMetadata.performerNames?.length
+      ? await this.resolvePerformerNames(item.editedMetadata.performerNames)
+      : item.editedMetadata.performers?.length
+        ? await this.resolvePerformers(item.editedMetadata.performers)
+        : await this.resolvePerformerNames(item.metadata?.performers || []);
     const tagIds = await this.resolveTags(item.editedMetadata.tags || []);
+    const studioName = item.editedMetadata.studioName ||
+      item.editedMetadata.studio?.name ||
+      item.metadata?.studio;
     const studioId = item.editedMetadata.studio
       ? await this.resolveStudio(item.editedMetadata.studio)
-      : undefined;
+      : studioName
+        ? (await this.stashService.getOrCreateStudio(studioName)).id
+        : undefined;
 
     if (onLog) onLog('info', `Resolved ${performerIds.length} performers, ${tagIds.length} tags, ${studioId ? '1 studio' : '0 studios'}`);
 
     // Create scene or image based on content type
-    const contentType = item.metadata?.contentType || ContentType.Video;
-
     let result: IStashScene | IStashImage;
 
     if (onStatusChange) onStatusChange('Creating entry in Stash...');
@@ -402,6 +449,17 @@ export class StashImportService {
         },
         base64Data
       );
+      const photoMetadata = getTikTokPhotoImageMetadata(
+        item.url,
+        getTikTokPhotoImageIndex(item.url)
+      );
+      await this.stashService.updateImage(result.id, {
+        title: photoMetadata?.title || item.editedMetadata.title,
+        url: photoMetadata?.url || item.url,
+        date: item.editedMetadata.date || item.metadata?.date,
+        ...(performerIds.length > 0 ? { performer_ids: performerIds } : {}),
+        studio_id: studioId,
+      });
     }
 
     if (onLog) onLog('success', `${contentType === ContentType.Video ? 'Scene' : 'Image'} created successfully in Stash`, `ID: ${result.id}`);
@@ -419,9 +477,141 @@ export class StashImportService {
     return result;
   }
 
+  private async importGallery(item: IDownloadItem, callbacks?: IImportCallbacks): Promise<IStashGallery> {
+    const { onProgress, onStatusChange, onLog, onJobStart } = callbacks || {};
+    const galleryImages = item.metadata?.galleryImages || [];
+    if (galleryImages.length === 0) {
+      throw new Error('This item is marked as a gallery but contains no image URLs');
+    }
+
+    const imageLibraryPath = await this.stashService.getImageLibraryPath();
+    if (!imageLibraryPath) {
+      throw new Error('No image-enabled Stash library was found. Add an image-enabled library before importing a gallery.');
+    }
+
+    const filePaths: string[] = [];
+    for (let index = 0; index < galleryImages.length; index++) {
+      const image = galleryImages[index]!;
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(image.url);
+      } catch {
+        throw new Error(`Gallery image ${index + 1} has an invalid URL`);
+      }
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        throw new Error(`Gallery image ${index + 1} must use HTTP or HTTPS`);
+      }
+
+      const filename = image.filename || `gallery-${Date.now()}-${index + 1}.jpg`;
+      onStatusChange?.(`Downloading image ${index + 1} of ${galleryImages.length}...`);
+      onLog?.('info', `Downloading gallery image ${index + 1} of ${galleryImages.length}`);
+
+      const download = await this.downloadService.downloadServerSide(image.url, {
+        outputDir: imageLibraryPath,
+        forceOutputDir: true,
+        filename,
+        forceDirect: true,
+        fallbackUrl: item.url,
+        galleryIndex: index + 1,
+        onProgress,
+        onJobStart,
+      });
+      if (!download.success || !download.file_path) {
+        throw new Error(`Failed to download gallery image ${index + 1}: ${download.error || 'No file path returned'}`);
+      }
+      filePaths.push(download.file_path);
+    }
+
+    onStatusChange?.('Scanning gallery images...');
+    onLog?.('info', `Scanning ${filePaths.length} downloaded image(s) into Stash`);
+    const scanJobId = await this.stashService.triggerScan(filePaths);
+    if (!scanJobId) {
+      throw new Error('Failed to start a Stash scan for the downloaded gallery images');
+    }
+    const scanResult = await this.stashService.waitForJob(scanJobId, {
+      pollIntervalMs: 1000,
+      maxWaitMs: 120000,
+    });
+    if (!scanResult.success) {
+      throw new Error(`Stash scan failed: ${scanResult.error || 'Unknown error'}`);
+    }
+
+    const imageIds: string[] = [];
+    for (const filePath of filePaths) {
+      let image: { id: string } | null = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        image = await this.stashService.findImageByPath(filePath);
+        if (image) break;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      if (!image) {
+        throw new Error(`Stash did not index downloaded gallery image: ${filePath}`);
+      }
+      imageIds.push(image.id);
+    }
+
+    const metadata = item.metadata;
+    const edited = item.editedMetadata!;
+    const performerNames = edited.performerNames?.length ? edited.performerNames : metadata?.performers || [];
+    const tagNames = edited.tagNames?.length ? edited.tagNames : metadata?.tags || [];
+    const performerIds = await this.resolvePerformerNames(performerNames);
+
+    const tagIds: string[] = [];
+    for (const name of new Set(tagNames.map(value => value.trim()).filter(Boolean))) {
+      const tag = await this.stashService.getOrCreateTag(name);
+      tagIds.push(tag.id);
+    }
+
+    const studioName = edited.studioName || edited.studio?.name || metadata?.studio;
+    const studio = studioName ? await this.stashService.getOrCreateStudio(studioName) : undefined;
+    const imageDate = edited.date || metadata?.date;
+    for (let index = 0; index < imageIds.length; index++) {
+      const photoMetadata = getTikTokPhotoImageMetadata(item.url, index + 1);
+      await this.stashService.updateImage(imageIds[index]!, {
+        ...(photoMetadata ? { title: photoMetadata.title, url: photoMetadata.url } : {}),
+        ...(imageDate ? { date: imageDate } : {}),
+        ...(performerIds.length > 0 ? { performer_ids: performerIds } : {}),
+        ...(studio ? { studio_id: studio.id } : {}),
+      });
+    }
+
+    onStatusChange?.('Creating gallery in Stash...');
+    const gallery = await this.stashService.createGallery({
+      title: edited.title || metadata?.title || item.url,
+      details: edited.description || metadata?.description,
+      url: item.url,
+      date: edited.date || metadata?.date,
+      rating100: edited.rating,
+      performer_ids: performerIds,
+      tag_ids: tagIds,
+      studio_id: studio?.id,
+    });
+
+    await this.stashService.addGalleryImages(gallery.id, imageIds);
+    try {
+      await this.stashService.setGalleryCover(gallery.id, imageIds[0]!);
+    } catch (error) {
+      log.warn(`Gallery created without an explicit cover image: ${String(error)}`);
+      onLog?.('warning', 'Gallery created, but the cover image could not be set');
+    }
+
+    onLog?.('success', `Gallery created with ${imageIds.length} image(s)`, `ID: ${gallery.id}`);
+    onStatusChange?.('Gallery imported');
+    return gallery;
+  }
+
   /**
    * Resolve performer IDs - creates new performers in Stash for temp IDs
    */
+  private async resolvePerformerNames(names: string[]): Promise<string[]> {
+    const performerIds: string[] = [];
+    for (const name of new Set(names.map(value => value.trim()).filter(Boolean))) {
+      const performer = await this.stashService.getOrCreatePerformer(name);
+      performerIds.push(performer.id);
+    }
+    return performerIds;
+  }
+
   private async resolvePerformers(performers: IStashPerformer[]): Promise<string[]> {
     const resolvedIds: string[] = [];
 
