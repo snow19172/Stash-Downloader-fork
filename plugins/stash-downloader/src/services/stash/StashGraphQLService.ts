@@ -14,6 +14,7 @@ import type {
   IStashGallery,
   ISceneCreateInput,
   IImageCreateInput,
+  IImageUpdateInput,
   IGalleryCreateInput,
   IPerformerCreateInput,
   ITagCreateInput,
@@ -302,6 +303,23 @@ export class StashGraphQLService {
       throw new Error('Failed to create image');
     }
     return result.data.imageCreate;
+  }
+
+  async updateImage(imageId: string, input: IImageUpdateInput): Promise<void> {
+    const mutation = `
+      mutation ImageUpdate($input: ImageUpdateInput!) {
+        imageUpdate(input: $input) {
+          id
+        }
+      }
+    `;
+
+    const result = await this.gqlRequest<{ imageUpdate: { id: string } }>(mutation, {
+      input: { id: imageId, ...input },
+    });
+    if (!result.data?.imageUpdate) {
+      throw new Error(`Failed to update image ${imageId}`);
+    }
   }
 
   /**

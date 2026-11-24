@@ -30,6 +30,39 @@ interface IImportCallbacks {
   onJobStart?: (jobId: string) => void;
 }
 
+function getTikTokPhotoImageMetadata(pageUrl: string, index: number): { title: string; url: string } | undefined {
+  try {
+    const url = new URL(pageUrl);
+    const hostname = url.hostname.toLowerCase();
+    const pathMatch = url.pathname.match(/^\/@[^/]+\/photo\/(\d+)\/?$/i);
+    if (
+      (hostname !== 'tiktok.com' && !hostname.endsWith('.tiktok.com')) ||
+      !pathMatch
+    ) {
+      return undefined;
+    }
+
+    url.search = '';
+    url.searchParams.set('image_index', String(index));
+    url.hash = '';
+    return {
+      title: `${pathMatch[1]}-${String(index).padStart(2, '0')}`,
+      url: url.toString(),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function getTikTokPhotoImageIndex(pageUrl: string): number {
+  try {
+    const index = Number(new URL(pageUrl).searchParams.get('image_index'));
+    return Number.isInteger(index) && index > 0 ? index : 1;
+  } catch {
+    return 1;
+  }
+}
+
 export class StashImportService {
   private stashService = getStashService();
   private downloadService = getDownloadService();
@@ -373,9 +406,14 @@ export class StashImportService {
       item.editedMetadata.performers || []
     );
     const tagIds = await this.resolveTags(item.editedMetadata.tags || []);
+    const studioName = item.editedMetadata.studioName ||
+      item.editedMetadata.studio?.name ||
+      item.metadata?.studio;
     const studioId = item.editedMetadata.studio
       ? await this.resolveStudio(item.editedMetadata.studio)
-      : undefined;
+      : studioName
+        ? (await this.stashService.getOrCreateStudio(studioName)).id
+        : undefined;
 
     if (onLog) onLog('info', `Resolved ${performerIds.length} performers, ${tagIds.length} tags, ${studioId ? '1 studio' : '0 studios'}`);
 
@@ -409,6 +447,16 @@ export class StashImportService {
         },
         base64Data
       );
+      const photoMetadata = getTikTokPhotoImageMetadata(
+        item.url,
+        getTikTokPhotoImageIndex(item.url)
+      );
+      await this.stashService.updateImage(result.id, {
+        title: photoMetadata?.title || item.editedMetadata.title,
+        url: photoMetadata?.url || item.url,
+        date: item.editedMetadata.date || item.metadata?.date,
+        studio_id: studioId,
+      });
     }
 
     if (onLog) onLog('success', `${contentType === ContentType.Video ? 'Scene' : 'Image'} created successfully in Stash`, `ID: ${result.id}`);
@@ -517,6 +565,16 @@ export class StashImportService {
 
     const studioName = edited.studioName || edited.studio?.name || metadata?.studio;
     const studio = studioName ? await this.stashService.getOrCreateStudio(studioName) : undefined;
+    const imageDate = edited.date || metadata?.date;
+    for (let index = 0; index < imageIds.length; index++) {
+      const photoMetadata = getTikTokPhotoImageMetadata(item.url, index + 1);
+      await this.stashService.updateImage(imageIds[index]!, {
+        ...(photoMetadata ? { title: photoMetadata.title, url: photoMetadata.url } : {}),
+        ...(imageDate ? { date: imageDate } : {}),
+        ...(studio ? { studio_id: studio.id } : {}),
+      });
+    }
+
     onStatusChange?.('Creating gallery in Stash...');
     const gallery = await this.stashService.createGallery({
       title: edited.title || metadata?.title || item.url,

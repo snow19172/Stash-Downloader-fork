@@ -15,6 +15,7 @@ describe('YtDlpScraper', () => {
       uploader: 'creator_handle',
       creator: 'Creator Display Name',
       creators: ['Less Reliable Creator'],
+      upload_date: '20250304',
       content_type: 'gallery',
       gallery_images: [
         { url: 'https://cdn.example/photo-1.jpg', filename: 'photo-1.jpg' },
@@ -31,8 +32,9 @@ describe('YtDlpScraper', () => {
       'https://cdn.example/photo-1.jpg',
       'https://cdn.example/photo-2.jpg',
     ]);
+    expect(metadata.date).toBe('2025-03-04');
     expect(metadata.performers).toEqual(['creator_handle']);
-    expect(metadata.studio).toBeUndefined();
+    expect(metadata.studio).toBe('creator_handle');
   });
 
   it('falls back to TikTok creator name when uploader is unavailable', async () => {
@@ -47,5 +49,6 @@ describe('YtDlpScraper', () => {
     const metadata = await new YtDlpScraper().scrape('https://www.tiktok.com/@creator/video/123456789');
 
     expect(metadata.performers).toEqual(['Creator Display Name']);
+    expect(metadata.studio).toBe('Creator Display Name');
   });
 });

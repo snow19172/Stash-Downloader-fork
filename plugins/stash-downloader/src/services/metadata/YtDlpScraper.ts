@@ -324,7 +324,9 @@ export class YtDlpScraper implements IMetadataScraper {
       thumbnailUrl: readResult.thumbnail || undefined,
       performers: performers,
       tags: tags,
-      studio: isTikTok ? undefined : readResult.uploader || readResult.channel || undefined,
+      studio: isTikTok
+        ? readResult.uploader || readResult.creator || undefined
+        : readResult.uploader || readResult.channel || undefined,
       quality: quality,
       availableQualities: availableQualities.length > 0 ? availableQualities : undefined,
       galleryImages: galleryImages.length > 0 ? galleryImages : undefined,

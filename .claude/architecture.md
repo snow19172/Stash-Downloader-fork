@@ -143,6 +143,7 @@ query GetPluginSettings($include: [ID!]) {
 - Fallback downloads preserve gallery-dl's category/user folder structure inside a dedicated `gallery-dl` subdirectory by default, so Stash scans the downloaded folder instead of the full library root
 - TikTok photo gallery imports use `galleryDlDownloadPath` for both direct CDN image downloads and gallery-dl fallback downloads, without changing yt-dlp's output directory
 - Stash metadata scans receive exact downloaded file paths; gallery imports pass every downloaded image path rather than scanning a containing library directory
+- TikTok gallery image records receive per-image titles, `image_index` source URLs, post dates, and the creator/uploader studio; standalone TikTok images and their gallery records use the same studio mapping
 - Quality selection (best, 1080p, 720p, 480p)
 - Metadata extraction without downloading
 - **Cover image fetching**: Fetches thumbnail URLs server-side (bypasses browser CSP)

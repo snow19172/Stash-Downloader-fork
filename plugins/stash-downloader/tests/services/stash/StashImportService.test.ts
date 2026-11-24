@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getDownloadService } from '@/services/download';
+import { getBrowserDownloadService } from '@/services/download/BrowserDownloadService';
 import { getStashService } from '@/services/stash/StashGraphQLService';
 import { StashImportService } from '@/services/stash/StashImportService';
 import { ContentType, DownloadStatus, type IDownloadItem } from '@/types';
@@ -82,6 +83,11 @@ describe('StashImportService', () => {
     vi.spyOn(stashService, 'findImageByPath')
       .mockResolvedValueOnce({ id: 'image-1' })
       .mockResolvedValueOnce({ id: 'image-2' });
+    const updateImage = vi.spyOn(stashService, 'updateImage').mockResolvedValue();
+    vi.spyOn(stashService, 'getOrCreateStudio').mockResolvedValue({
+      id: 'studio-1',
+      name: 'creator_handle',
+    });
     const createGallery = vi.spyOn(stashService, 'createGallery').mockResolvedValue({
       id: 'gallery-1',
       title: 'TikTok photo post',
@@ -101,6 +107,8 @@ describe('StashImportService', () => {
         url: 'https://www.tiktok.com/@creator/photo/123456789',
         title: 'TikTok photo post',
         contentType: ContentType.Gallery,
+        date: '2025-03-04',
+        studio: 'creator_handle',
         galleryImages: [
           { url: 'https://cdn.example/photo-1', filename: 'photo-1.jpg' },
           { url: 'https://cdn.example/photo-2', filename: 'photo-2.jpg' },
@@ -122,8 +130,74 @@ describe('StashImportService', () => {
       filename: 'photo-1.jpg',
     }));
     expect(scan).toHaveBeenCalledWith(['/stash/images/photo-1.jpg', '/stash/images/photo-2.jpg']);
-    expect(createGallery).toHaveBeenCalledWith(expect.objectContaining({ title: 'TikTok photo post' }));
+    expect(updateImage).toHaveBeenNthCalledWith(1, 'image-1', {
+      title: '123456789-01',
+      url: 'https://www.tiktok.com/@creator/photo/123456789?image_index=1',
+      date: '2025-03-04',
+      studio_id: 'studio-1',
+    });
+    expect(updateImage).toHaveBeenNthCalledWith(2, 'image-2', {
+      title: '123456789-02',
+      url: 'https://www.tiktok.com/@creator/photo/123456789?image_index=2',
+      date: '2025-03-04',
+      studio_id: 'studio-1',
+    });
+    expect(createGallery).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'TikTok photo post',
+      date: '2025-03-04',
+      studio_id: 'studio-1',
+    }));
     expect(addGalleryImages).toHaveBeenCalledWith('gallery-1', ['image-1', 'image-2']);
     expect(setGalleryCover).toHaveBeenCalledWith('gallery-1', 'image-1');
+  });
+
+  it('sets TikTok photo metadata and creator studio on a standalone image', async () => {
+    const downloadService = getDownloadService();
+    const stashService = getStashService();
+    vi.spyOn(downloadService, 'download').mockResolvedValue(new Blob(['image']));
+    vi.spyOn(stashService, 'getOrCreateStudio').mockResolvedValue({
+      id: 'studio-1',
+      name: 'creator_handle',
+    });
+    vi.spyOn(stashService, 'createImage').mockResolvedValue({
+      id: 'image-1',
+      title: 'TikTok photo post',
+      organized: false,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      files: [],
+      paths: {},
+    });
+    const updateImage = vi.spyOn(stashService, 'updateImage').mockResolvedValue();
+    vi.spyOn(getBrowserDownloadService(), 'downloadWithMetadata').mockResolvedValue();
+    const item: IDownloadItem = {
+      id: 'image-item',
+      url: 'https://www.tiktok.com/@creator/photo/123456789?image_index=2',
+      status: DownloadStatus.Pending,
+      addedAt: new Date(),
+      metadata: {
+        url: 'https://www.tiktok.com/@creator/photo/123456789',
+        title: 'TikTok photo post',
+        date: '2025-03-04',
+        studio: 'creator_handle',
+        contentType: ContentType.Image,
+        imageUrl: 'https://cdn.example/photo.jpg',
+      },
+      editedMetadata: {
+        title: 'TikTok photo post',
+      },
+    };
+
+    await new StashImportService().importToStash(item);
+
+    expect(stashService.createImage).toHaveBeenCalledWith(expect.objectContaining({
+      studio_id: 'studio-1',
+    }));
+    expect(updateImage).toHaveBeenCalledWith('image-1', {
+      title: '123456789-02',
+      url: 'https://www.tiktok.com/@creator/photo/123456789?image_index=2',
+      date: '2025-03-04',
+      studio_id: 'studio-1',
+    });
   });
 });
