@@ -1,7 +1,7 @@
 name: Stash Downloader
 description: Download images and videos from URLs with automatic metadata extraction and organization
-version: 0.1.0
-url: https://github.com/Codename-11/Stash-Downloader
+version: 0.5.3-fork
+url: https://github.com/snow19172/Stash-Downloader-fork
 settings:
   serverDownloadPath:
     displayName: Download Path

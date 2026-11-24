@@ -6,7 +6,7 @@ Stash Browser is not maintained in this fork, so it is not published.
 Mirrors the stable packaging in .github/workflows/publish.yml, but writes to a
 local folder so it can be committed and served from raw.githubusercontent.com
 without GitHub Pages. The repo root on main is the published source:
-https://raw.githubusercontent.com/bakumetsu/Stash-Downloader/main/index.yml
+https://raw.githubusercontent.com/snow19172/Stash-Downloader-fork/main/index.yml
 
 Usage (after `npm run build`):
     python package_plugin_source.py . [--repo-url URL]
@@ -51,7 +51,7 @@ def build_zip(plugin_dir: Path, plugin_id: str, extra_files: list, zip_path: Pat
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("output_dir", type=Path)
-    parser.add_argument("--repo-url", default="https://github.com/bakumetsu/Stash-Downloader")
+    parser.add_argument("--repo-url", default="https://github.com/snow19172/Stash-Downloader-fork")
     args = parser.parse_args()
 
     out = args.output_dir.resolve()
