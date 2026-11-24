@@ -402,9 +402,11 @@ export class StashImportService {
     // Get or create performers, tags, studio
     if (onStatusChange) onStatusChange('Resolving metadata...');
     if (onLog) onLog('info', 'Resolving performers, tags, and studio...');
-    const performerIds = await this.resolvePerformers(
-      item.editedMetadata.performers || []
-    );
+    const performerIds = item.editedMetadata.performerNames?.length
+      ? await this.resolvePerformerNames(item.editedMetadata.performerNames)
+      : item.editedMetadata.performers?.length
+        ? await this.resolvePerformers(item.editedMetadata.performers)
+        : await this.resolvePerformerNames(item.metadata?.performers || []);
     const tagIds = await this.resolveTags(item.editedMetadata.tags || []);
     const studioName = item.editedMetadata.studioName ||
       item.editedMetadata.studio?.name ||
@@ -455,6 +457,7 @@ export class StashImportService {
         title: photoMetadata?.title || item.editedMetadata.title,
         url: photoMetadata?.url || item.url,
         date: item.editedMetadata.date || item.metadata?.date,
+        ...(performerIds.length > 0 ? { performer_ids: performerIds } : {}),
         studio_id: studioId,
       });
     }
@@ -551,11 +554,7 @@ export class StashImportService {
     const edited = item.editedMetadata!;
     const performerNames = edited.performerNames?.length ? edited.performerNames : metadata?.performers || [];
     const tagNames = edited.tagNames?.length ? edited.tagNames : metadata?.tags || [];
-    const performerIds: string[] = [];
-    for (const name of new Set(performerNames.map(value => value.trim()).filter(Boolean))) {
-      const performer = await this.stashService.getOrCreatePerformer(name);
-      performerIds.push(performer.id);
-    }
+    const performerIds = await this.resolvePerformerNames(performerNames);
 
     const tagIds: string[] = [];
     for (const name of new Set(tagNames.map(value => value.trim()).filter(Boolean))) {
@@ -571,6 +570,7 @@ export class StashImportService {
       await this.stashService.updateImage(imageIds[index]!, {
         ...(photoMetadata ? { title: photoMetadata.title, url: photoMetadata.url } : {}),
         ...(imageDate ? { date: imageDate } : {}),
+        ...(performerIds.length > 0 ? { performer_ids: performerIds } : {}),
         ...(studio ? { studio_id: studio.id } : {}),
       });
     }
@@ -603,6 +603,15 @@ export class StashImportService {
   /**
    * Resolve performer IDs - creates new performers in Stash for temp IDs
    */
+  private async resolvePerformerNames(names: string[]): Promise<string[]> {
+    const performerIds: string[] = [];
+    for (const name of new Set(names.map(value => value.trim()).filter(Boolean))) {
+      const performer = await this.stashService.getOrCreatePerformer(name);
+      performerIds.push(performer.id);
+    }
+    return performerIds;
+  }
+
   private async resolvePerformers(performers: IStashPerformer[]): Promise<string[]> {
     const resolvedIds: string[] = [];
 

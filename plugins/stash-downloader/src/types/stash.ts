@@ -143,6 +143,7 @@ export interface IImageUpdateInput {
   title?: string;
   url?: string;
   date?: string;
+  performer_ids?: string[];
   studio_id?: string;
 }
 

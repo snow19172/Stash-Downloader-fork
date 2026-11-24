@@ -51,7 +51,7 @@ Download videos and images directly to your Stash library with automatic metadat
 
 - **URL-based Downloads** - Paste URLs to download videos and images
 - **Automatic Metadata** - Extracts titles, thumbnails, performers, tags, studio via yt-dlp; gallery-dl is an optional TikTok fallback
-- **TikTok Photo Galleries** - Imports per-image titles, image-index source URLs and dates; creator/uploader is used as the studio
+- **TikTok Photo Galleries** - Imports per-image titles, image-index source URLs and dates; creator/uploader is linked as performer and studio
 - **Editable Metadata** - Review and edit performers, tags, studio before import
 - **Cover Images** - Scraped thumbnails automatically set as scene covers
 - **Browser Extension** - Right-click any link to send directly to your queue

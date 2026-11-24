@@ -32,7 +32,7 @@
 
 ## Completed
 - [x] Improve TikTok compatibility with yt-dlp's curl-cffi support, original-page imports, and actionable download errors
-- [x] Import TikTok photo posts with per-image titles, source URLs and dates, creator studio metadata, and automatic gallery linking
+- [x] Import TikTok photo posts with per-image titles, source URLs, dates, creator performer/studio metadata, and automatic gallery linking
 - [x] Add gallery-dl metadata/version/path reporting, honor its configured directory for TikTok photo imports, and scan exact files
 - [x] Preserve detected image type and scraped image URL through the import download flow
 - [x] Edit & Import advances to the next pending item on click (import continues in background); finished imports no longer reopen the modal

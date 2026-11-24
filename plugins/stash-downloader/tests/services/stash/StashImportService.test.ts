@@ -84,6 +84,10 @@ describe('StashImportService', () => {
       .mockResolvedValueOnce({ id: 'image-1' })
       .mockResolvedValueOnce({ id: 'image-2' });
     const updateImage = vi.spyOn(stashService, 'updateImage').mockResolvedValue();
+    vi.spyOn(stashService, 'getOrCreatePerformer').mockResolvedValue({
+      id: 'performer-1',
+      name: 'creator_handle',
+    });
     vi.spyOn(stashService, 'getOrCreateStudio').mockResolvedValue({
       id: 'studio-1',
       name: 'creator_handle',
@@ -109,6 +113,7 @@ describe('StashImportService', () => {
         contentType: ContentType.Gallery,
         date: '2025-03-04',
         studio: 'creator_handle',
+        performers: ['creator_handle'],
         galleryImages: [
           { url: 'https://cdn.example/photo-1', filename: 'photo-1.jpg' },
           { url: 'https://cdn.example/photo-2', filename: 'photo-2.jpg' },
@@ -134,17 +139,20 @@ describe('StashImportService', () => {
       title: '123456789-01',
       url: 'https://www.tiktok.com/@creator/photo/123456789?image_index=1',
       date: '2025-03-04',
+      performer_ids: ['performer-1'],
       studio_id: 'studio-1',
     });
     expect(updateImage).toHaveBeenNthCalledWith(2, 'image-2', {
       title: '123456789-02',
       url: 'https://www.tiktok.com/@creator/photo/123456789?image_index=2',
       date: '2025-03-04',
+      performer_ids: ['performer-1'],
       studio_id: 'studio-1',
     });
     expect(createGallery).toHaveBeenCalledWith(expect.objectContaining({
       title: 'TikTok photo post',
       date: '2025-03-04',
+      performer_ids: ['performer-1'],
       studio_id: 'studio-1',
     }));
     expect(addGalleryImages).toHaveBeenCalledWith('gallery-1', ['image-1', 'image-2']);
@@ -155,6 +163,10 @@ describe('StashImportService', () => {
     const downloadService = getDownloadService();
     const stashService = getStashService();
     vi.spyOn(downloadService, 'download').mockResolvedValue(new Blob(['image']));
+    vi.spyOn(stashService, 'getOrCreatePerformer').mockResolvedValue({
+      id: 'performer-1',
+      name: 'creator_handle',
+    });
     vi.spyOn(stashService, 'getOrCreateStudio').mockResolvedValue({
       id: 'studio-1',
       name: 'creator_handle',
@@ -180,6 +192,7 @@ describe('StashImportService', () => {
         title: 'TikTok photo post',
         date: '2025-03-04',
         studio: 'creator_handle',
+        performers: ['creator_handle'],
         contentType: ContentType.Image,
         imageUrl: 'https://cdn.example/photo.jpg',
       },
@@ -191,12 +204,14 @@ describe('StashImportService', () => {
     await new StashImportService().importToStash(item);
 
     expect(stashService.createImage).toHaveBeenCalledWith(expect.objectContaining({
+      performer_ids: ['performer-1'],
       studio_id: 'studio-1',
     }));
     expect(updateImage).toHaveBeenCalledWith('image-1', {
       title: '123456789-02',
       url: 'https://www.tiktok.com/@creator/photo/123456789?image_index=2',
       date: '2025-03-04',
+      performer_ids: ['performer-1'],
       studio_id: 'studio-1',
     });
   });
